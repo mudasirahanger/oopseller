@@ -22,12 +22,12 @@ class ChannelCoreTest extends TestCase
 
         $catalog = collect($response->json('data'));
         $amazon = $catalog->firstWhere('platform', 'amazon');
-        $flipkart = $catalog->firstWhere('platform', 'flipkart');
+        $shopify = $catalog->firstWhere('platform', 'shopify');
 
         $this->assertNotNull($amazon);
         $this->assertContains($amazon['status'], ['available', 'needs_configuration']);
-        $this->assertSame('coming_soon', $flipkart['status']);
-        $this->assertSame('oauth', $flipkart['auth_type']);
+        $this->assertSame('coming_soon', $shopify['status']);
+        $this->assertSame('oauth', $shopify['auth_type']);
     }
 
     public function test_amazon_account_is_platform_scoped_channel_account(): void

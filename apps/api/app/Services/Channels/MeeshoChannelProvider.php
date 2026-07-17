@@ -1,0 +1,120 @@
+<?php
+
+namespace App\Services\Channels;
+
+use App\Enums\Platform;
+use App\Models\ChannelAccount;
+use App\Models\Listing;
+use App\Services\Channels\Contracts\ChannelProvider;
+use App\Services\Channels\Exceptions\ChannelApiException;
+use App\Services\Channels\Exceptions\UnsupportedChannelOperation;
+use DateTimeInterface;
+use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Support\Facades\Http;
+
+// Meesho Supplier API adapter. Auth is per-account API key + secret issued in
+// the Meesho Supplier Panel (stored encrypted on the channel account); there
+// is no server-level app registration, so the platform is always "configured".
+final class MeeshoChannelProvider implements ChannelProvider
+{
+    public function platform(): Platform
+    {
+        return Platform::Meesho;
+    }
+
+    public function isConfigured(): bool
+    {
+        return true;
+    }
+
+    public function authorizationUrl(string $state, array $options = []): ?string
+    {
+        return null;
+    }
+
+    public function exchangeCode(string $code): array
+    {
+        throw UnsupportedChannelOperation::for($this->platform(), 'OAuth code exchange (Meesho uses API keys)');
+    }
+
+    public function syncListings(ChannelAccount $account, array $options = []): iterable
+    {
+        $page = 1;
+
+        do {
+            $response = $this->request($account)->get($this->baseUrl().'/api/v1/products', [
+                'page' => $page,
+                'page_size' => 50,
+            ]);
+
+            if ($response->failed()) {
+                throw new ChannelApiException(
+                    $this->platform(),
+                    (string) ($response->json('message') ?: "Meesho API request failed with HTTP {$response->status()}."),
+                    $response->status(),
+                );
+            }
+
+            $payload = (array) $response->json();
+            $items = (array) ($payload['products'] ?? $payload['data'] ?? []);
+
+            foreach ($items as $item) {
+                $price = $item['price'] ?? data_get($item, 'pricing.selling_price');
+
+                yield [
+                    'external_id' => (string) ($item['product_id'] ?? $item['id'] ?? ''),
+                    'sku' => $item['sku'] ?? $item['supplier_sku'] ?? null,
+                    'name' => (string) ($item['name'] ?? $item['title'] ?? 'Meesho product'),
+                    'status' => strtolower((string) ($item['status'] ?? 'active')) === 'active' ? 'active' : 'inactive',
+                    'image_url' => data_get($item, 'images.0') ?: ($item['image_url'] ?? null),
+                    'price' => is_numeric($price) ? (float) $price : null,
+                    'currency' => 'INR',
+                    'marketplace_code' => 'meesho_in',
+                    'raw' => $item,
+                ];
+            }
+
+            $hasMore = count($items) === 50 && (bool) ($payload['has_more'] ?? true);
+            $page++;
+        } while ($hasMore && $page <= 200);
+    }
+
+    public function getOrders(ChannelAccount $account, DateTimeInterface $from, DateTimeInterface $to, array $options = []): iterable
+    {
+        throw UnsupportedChannelOperation::for($this->platform(), 'order sync (planned for the orders phase)');
+    }
+
+    public function updateListing(ChannelAccount $account, Listing $listing, array $patches, array $options = []): array
+    {
+        throw UnsupportedChannelOperation::for($this->platform(), 'listing updates');
+    }
+
+    public function getInventory(ChannelAccount $account, array $options = []): iterable
+    {
+        throw UnsupportedChannelOperation::for($this->platform(), 'inventory sync');
+    }
+
+    private function request(ChannelAccount $account): PendingRequest
+    {
+        $credentials = (array) $account->credentials;
+
+        if (blank($credentials['api_key'] ?? null) || blank($credentials['api_secret'] ?? null)) {
+            throw new ChannelApiException($this->platform(), 'This Meesho account has no API credentials. Reconnect it with a supplier API key and secret.');
+        }
+
+        return Http::withHeaders([
+            'X-Api-Key' => (string) $credentials['api_key'],
+            'X-Api-Secret' => (string) $credentials['api_secret'],
+            'X-Supplier-Id' => (string) ($credentials['supplier_id'] ?? $account->account_identifier),
+        ])
+            ->acceptJson()
+            ->timeout((int) config('services.meesho.timeout', 30))
+            ->connectTimeout(10)
+            ->retry(2, 500, throw: false);
+    }
+
+    private function baseUrl(): string
+    {
+        return rtrim((string) config('services.meesho.base_url'), '/');
+    }
+}

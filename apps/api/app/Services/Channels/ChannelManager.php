@@ -12,8 +12,10 @@ final class ChannelManager
     /** @var array<string, class-string<ChannelProvider>> */
     private const PROVIDERS = [
         Platform::Amazon->value => AmazonChannelProvider::class,
-        // Register new platform adapters here as they are implemented, e.g.
-        // Platform::Flipkart->value => FlipkartChannelProvider::class,
+        Platform::Flipkart->value => FlipkartChannelProvider::class,
+        Platform::Meesho->value => MeeshoChannelProvider::class,
+        Platform::Snapdeal->value => SnapdealChannelProvider::class,
+        // Register new platform adapters here as they are implemented.
     ];
 
     public function __construct(private readonly Container $container) {}
@@ -48,6 +50,9 @@ final class ChannelManager
             'status' => $this->has($platform)
                 ? ($this->provider($platform)->isConfigured() ? 'available' : 'needs_configuration')
                 : 'coming_soon',
+            'docs_url' => $platform->docsUrl(),
+            'setup_steps' => $platform->setupSteps(),
+            'credential_fields' => $platform->credentialFields(),
         ], Platform::cases());
     }
 }

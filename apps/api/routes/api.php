@@ -27,6 +27,8 @@ Route::prefix('v1')->group(function (): void {
     Route::post('/auth/reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:auth');
     Route::get('/integrations/amazon/callback', [AmazonIntegrationController::class, 'callback'])
         ->middleware('throttle:amazon-oauth');
+    Route::get('/integrations/channels/{platform}/callback', [ChannelController::class, 'callback'])
+        ->middleware('throttle:amazon-oauth');
 
     Route::middleware(['auth:sanctum', 'organization', 'throttle:api-writes'])->group(function (): void {
         Route::get('/auth/me', [AuthController::class, 'me']);
@@ -58,6 +60,13 @@ Route::prefix('v1')->group(function (): void {
 
         Route::get('/marketplaces', [AmazonIntegrationController::class, 'marketplaces']);
         Route::get('/integrations/channels', [ChannelController::class, 'index']);
+        Route::get('/integrations/channels/accounts', [ChannelController::class, 'accounts']);
+        Route::post('/integrations/channels/{platform}/connect', [ChannelController::class, 'connect'])
+            ->middleware('throttle:amazon-oauth');
+        Route::post('/integrations/channels/{platform}/authorize', [ChannelController::class, 'authorize'])
+            ->middleware('throttle:amazon-oauth');
+        Route::post('/integrations/channel-accounts/{channelAccount}/sync', [ChannelController::class, 'sync']);
+        Route::delete('/integrations/channel-accounts/{channelAccount}', [ChannelController::class, 'disconnect']);
         Route::get('/integrations/amazon/accounts', [AmazonIntegrationController::class, 'index']);
         Route::post('/integrations/amazon/authorize', [AmazonIntegrationController::class, 'authorizeSeller'])
             ->middleware('throttle:amazon-oauth');
