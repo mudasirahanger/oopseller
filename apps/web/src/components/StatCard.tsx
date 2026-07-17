@@ -1,0 +1,2 @@
+import type { Stat } from "@/lib/types";
+export function StatCard({stat}:{stat:Stat}){let value=stat.value;if(stat.format==="currency"&&typeof value==="number")value=new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:0}).format(value);if(stat.format==="score")value=`${value}/100`;return <article className="statCard"><div className="statTop"><span>{stat.label}</span><span className="metricGlyph">↗</span></div><strong>{value}</strong><small>Live agency workspace</small></article>}

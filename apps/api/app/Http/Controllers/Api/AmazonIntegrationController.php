@@ -1,0 +1,264 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Jobs\Amazon\SyncAmazonListings;
+use App\Models\AmazonAccount;
+use App\Models\ChannelSyncRun;
+use App\Models\Client;
+use App\Models\Marketplace;
+use App\Services\Amazon\Contracts\SellerDataProvider;
+use App\Services\Amazon\Exceptions\AmazonSpApiException;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
+use Throwable;
+
+class AmazonIntegrationController extends Controller
+{
+    public function index(Request $request): JsonResponse
+    {
+        $organizationId = (int) $request->attributes->get('organization_id');
+
+        return response()->json([
+            'data' => AmazonAccount::query()
+                ->where('organization_id', $organizationId)
+                ->with(['client:id,name', 'marketplaces'])
+                ->with(['syncRuns' => fn ($query) => $query->latest()->limit(5)])
+                ->latest()
+                ->get(),
+            'meta' => [
+                'configured' => $this->isConfigured(),
+                'draft_mode' => (bool) config('services.amazon.authorization_draft'),
+                'redirect_uri' => config('services.amazon.redirect_uri'),
+            ],
+        ]);
+    }
+
+    public function marketplaces(): JsonResponse
+    {
+        return response()->json(['data' => Marketplace::query()->orderBy('name')->get()]);
+    }
+
+    public function authorizeSeller(Request $request, SellerDataProvider $provider): JsonResponse
+    {
+        $data = $request->validate([
+            'client_id' => ['required', 'integer', 'exists:clients,id'],
+            'marketplace_id' => ['required', 'string', 'exists:marketplaces,amazon_marketplace_id'],
+            'draft' => ['sometimes', 'boolean'],
+        ]);
+        $organizationId = (int) $request->attributes->get('organization_id');
+        $client = Client::where('organization_id', $organizationId)->findOrFail($data['client_id']);
+        $marketplace = Marketplace::where('amazon_marketplace_id', $data['marketplace_id'])->firstOrFail();
+        $state = Str::random(64);
+
+        Cache::put('amazon_oauth_state:'.$state, [
+            'organization_id' => $organizationId,
+            'client_id' => $client->id,
+            'user_id' => $request->user()->id,
+            'marketplace_id' => $marketplace->amazon_marketplace_id,
+            'region' => $marketplace->region,
+        ], now()->addMinutes(15));
+
+        return response()->json([
+            'data' => [
+                'authorization_url' => $provider->authorizationUrl(
+                    $state,
+                    $marketplace,
+                    (bool) ($data['draft'] ?? config('services.amazon.authorization_draft')),
+                ),
+            ],
+        ]);
+    }
+
+    public function callback(Request $request, SellerDataProvider $provider): RedirectResponse
+    {
+        if ($request->filled('error')) {
+            return $this->frontendRedirect([
+                'amazon' => 'error',
+                'message' => Str::limit((string) ($request->input('error_description') ?: $request->input('error')), 180),
+            ]);
+        }
+
+        $data = $request->validate([
+            'state' => ['required', 'string'],
+            'spapi_oauth_code' => ['required', 'string'],
+            'selling_partner_id' => ['required', 'string', 'max:100'],
+        ]);
+        $state = Cache::pull('amazon_oauth_state:'.$data['state']);
+
+        abort_unless($state, 419, 'Amazon authorization state expired or is invalid.');
+
+        try {
+            $token = $provider->exchangeAuthorizationCode($data['spapi_oauth_code']);
+            abort_unless(filled($token['refresh_token'] ?? null), 502, 'Amazon did not return a refresh token. Restart the authorization flow.');
+
+            $existingAccount = AmazonAccount::query()
+                ->where('organization_id', $state['organization_id'])
+                ->where('account_identifier', $data['selling_partner_id'])
+                ->first();
+            abort_if(
+                $existingAccount && $existingAccount->client_id !== (int) $state['client_id'],
+                409,
+                'This Amazon seller account is already connected to another client in the agency.',
+            );
+
+            $account = AmazonAccount::updateOrCreate(
+                [
+                    'organization_id' => $state['organization_id'],
+                    'account_identifier' => $data['selling_partner_id'],
+                ],
+                [
+                    'client_id' => $state['client_id'],
+                    'name' => 'Amazon Seller '.$data['selling_partner_id'],
+                    'region' => $state['region'],
+                    'refresh_token' => $token['refresh_token'] ?? null,
+                    'status' => 'active',
+                    'authorized_at' => now(),
+                    'last_sync_error' => null,
+                    'metadata' => ['initial_marketplace_id' => $state['marketplace_id']],
+                ],
+            );
+
+            Cache::forget('amazon_lwa_access_token:'.$account->id);
+            $this->syncMarketplaceParticipations($account, $provider, $state['marketplace_id']);
+            $this->queueSync($account, $state['marketplace_id']);
+
+            return $this->frontendRedirect(['amazon' => 'connected', 'account_id' => $account->id]);
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return $this->frontendRedirect([
+                'amazon' => 'error',
+                'message' => $exception instanceof AmazonSpApiException
+                    ? Str::limit($exception->getMessage(), 180)
+                    : 'Amazon authorization failed. Try connecting the seller account again.',
+            ]);
+        }
+    }
+
+    public function sync(Request $request, AmazonAccount $amazonAccount): JsonResponse
+    {
+        $this->assertAccountAccess($request, $amazonAccount);
+        $data = $request->validate([
+            'marketplace_id' => ['required', 'string', 'exists:marketplaces,amazon_marketplace_id'],
+        ]);
+        abort_unless(
+            $amazonAccount->marketplaces()->where('amazon_marketplace_id', $data['marketplace_id'])->wherePivot('enabled', true)->exists(),
+            422,
+            'This marketplace is not enabled for the Amazon account.',
+        );
+
+        $run = $this->queueSync($amazonAccount, $data['marketplace_id']);
+
+        return response()->json(['data' => $run], 202);
+    }
+
+    public function disconnect(Request $request, AmazonAccount $amazonAccount): JsonResponse
+    {
+        $this->assertAccountAccess($request, $amazonAccount);
+        $this->requireOrganizationRole($request, 'owner', 'admin');
+        $amazonAccount->update([
+            'refresh_token' => null,
+            'status' => 'disconnected',
+            'last_sync_error' => null,
+        ]);
+        Cache::forget('amazon_lwa_access_token:'.$amazonAccount->id);
+
+        return response()->json(['message' => 'Amazon seller account disconnected.']);
+    }
+
+    private function syncMarketplaceParticipations(AmazonAccount $account, SellerDataProvider $provider, string $fallbackMarketplaceId): void
+    {
+        try {
+            $participations = $provider->marketplaceParticipations($account);
+            $ids = [];
+
+            foreach ($participations as $participation) {
+                $marketplaceData = $participation['marketplace'] ?? [];
+                $marketplaceId = $marketplaceData['id'] ?? null;
+
+                if (! $marketplaceId) {
+                    continue;
+                }
+
+                $marketplace = Marketplace::updateOrCreate(
+                    ['amazon_marketplace_id' => $marketplaceId],
+                    [
+                        'country_code' => $marketplaceData['countryCode'] ?? 'XX',
+                        'name' => $marketplaceData['name'] ?? $marketplaceId,
+                        'currency' => $marketplaceData['defaultCurrencyCode'] ?? 'USD',
+                        'domain' => $marketplaceData['domainName'] ?? 'amazon.com',
+                        'region' => $account->region,
+                    ],
+                );
+                $ids[$marketplace->id] = ['enabled' => (bool) data_get($participation, 'participation.isParticipating', true)];
+            }
+
+            if ($ids !== []) {
+                $account->marketplaces()->sync($ids);
+
+                return;
+            }
+        } catch (AmazonSpApiException $exception) {
+            report($exception);
+        }
+
+        $fallback = Marketplace::where('amazon_marketplace_id', $fallbackMarketplaceId)->first();
+        if ($fallback) {
+            $account->marketplaces()->syncWithoutDetaching([$fallback->id => ['enabled' => true]]);
+        }
+    }
+
+    private function queueSync(AmazonAccount $account, string $marketplaceId): ChannelSyncRun
+    {
+        $pending = ChannelSyncRun::query()
+            ->where('channel_account_id', $account->id)
+            ->where('marketplace_id', $marketplaceId)
+            ->whereIn('status', ['queued', 'running'])
+            ->where('created_at', '>=', now()->subMinutes(30))
+            ->latest()
+            ->first();
+
+        if ($pending) {
+            return $pending;
+        }
+
+        $run = ChannelSyncRun::create([
+            'organization_id' => $account->organization_id,
+            'client_id' => $account->client_id,
+            'platform' => $account->platform,
+            'channel_account_id' => $account->id,
+            'marketplace_id' => $marketplaceId,
+            'type' => 'listings',
+            'status' => 'queued',
+        ]);
+
+        SyncAmazonListings::dispatch($account->id, $marketplaceId, $run->id);
+
+        return $run;
+    }
+
+    private function assertAccountAccess(Request $request, AmazonAccount $account): void
+    {
+        abort_unless($account->organization_id === (int) $request->attributes->get('organization_id'), 404);
+    }
+
+    private function frontendRedirect(array $query): RedirectResponse
+    {
+        $url = rtrim((string) config('app.frontend_url'), '/').'/integrations';
+
+        return redirect($url.'?'.http_build_query($query));
+    }
+
+    private function isConfigured(): bool
+    {
+        return filled(config('services.amazon.lwa_client_id'))
+            && filled(config('services.amazon.lwa_client_secret'))
+            && filled(config('services.amazon.application_id'))
+            && filled(config('services.amazon.redirect_uri'));
+    }
+}
