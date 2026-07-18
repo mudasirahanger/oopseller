@@ -17,7 +17,9 @@ Scope: full review of `apps/api` (Laravel) and `apps/web` (Next.js), auth/tenanc
 
 ### Critical
 
-- **C1. Live Amazon LWA credentials in `apps/api/.env`** (`AMAZON_LWA_CLIENT_ID` / `AMAZON_LWA_CLIENT_SECRET`). This project has been distributed as a ZIP, so the secret must be treated as leaked. Rotate it in the Amazon developer console and move production secrets to a secret manager. Never ship `.env` in archives.
+- **C1. Live Amazon LWA credentials in `apps/api/.env`** (`AMAZON_LWA_CLIENT_ID` / `AMAZON_LWA_CLIENT_SECRET`). This project has been distributed as a ZIP, so the secret must be treated as leaked.
+  - ✅ **Code remediated (2026-07-18):** secret values scrubbed from the working-tree `.env`; credentials now load via `secret_env()` (mounted secret file `<KEY>_FILE`, else env) in `config/services.php`; verified the secret is absent from git history and excluded by `.gitignore`/`.dockerignore`. Runbook: `docs/credential-handling.md`.
+  - ⛔ **Still required from the account owner:** rotate the exposed secret in the Amazon Developer Console — scrubbing the file does not undo the prior exposure. Do this before attesting "credentials stored securely" on the Solution Provider Profile.
 - **C2. Bearer token + org ID in `localStorage`** (`apps/web/src/lib/api.ts`). Any XSS becomes full account takeover with no expiry (see C3). Move to Sanctum SPA cookie auth (HTTP-only, SameSite) for the first-party web app. Already noted in `production-readiness.md`; it is the single biggest pre-launch change.
 - **C3. No authorization layer beyond membership.** `EnsureOrganizationAccess` verifies the user belongs to the org, but the `role` on the org pivot is only enforced in `OrganizationController`. Any member — including a future read-only or client-portal role — can delete clients, disconnect Amazon accounts, publish listings to Amazon, and manage all data. Implement Laravel Policies for every model plus a role matrix (owner / admin / member / viewer).
 
