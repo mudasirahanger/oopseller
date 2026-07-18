@@ -69,6 +69,52 @@ final class SpApiSellerDataProvider implements SellerDataProvider
         } while (filled($pageToken));
     }
 
+    public function importOrders(ChannelAccount $account, array $marketplaceIds, \DateTimeInterface $updatedAfter, ?\DateTimeInterface $updatedBefore = null): iterable
+    {
+        $nextToken = null;
+
+        do {
+            $query = $nextToken
+                ? ['NextToken' => $nextToken]
+                : array_filter([
+                    'MarketplaceIds' => $marketplaceIds,
+                    'LastUpdatedAfter' => $updatedAfter->format('Y-m-d\TH:i:s\Z'),
+                    'LastUpdatedBefore' => $updatedBefore?->format('Y-m-d\TH:i:s\Z'),
+                    'MaxResultsPerPage' => 100,
+                ]);
+
+            $payload = $this->client->get($account, '/orders/v0/orders', $query)['payload'] ?? [];
+
+            foreach ($payload['Orders'] ?? [] as $order) {
+                $order['OrderItems'] = $this->orderItems($account, (string) $order['AmazonOrderId']);
+
+                yield $order;
+            }
+
+            $nextToken = $payload['NextToken'] ?? null;
+        } while (filled($nextToken));
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function orderItems(ChannelAccount $account, string $amazonOrderId): array
+    {
+        $items = [];
+        $nextToken = null;
+
+        do {
+            $payload = $this->client->get(
+                $account,
+                '/orders/v0/orders/'.rawurlencode($amazonOrderId).'/orderItems',
+                array_filter(['NextToken' => $nextToken]),
+            )['payload'] ?? [];
+
+            $items = [...$items, ...($payload['OrderItems'] ?? [])];
+            $nextToken = $payload['NextToken'] ?? null;
+        } while (filled($nextToken));
+
+        return $items;
+    }
+
     public function getCatalogItem(ChannelAccount $account, string $marketplaceId, string $asin): array
     {
         return $this->client->get(

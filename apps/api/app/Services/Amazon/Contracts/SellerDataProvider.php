@@ -15,6 +15,14 @@ interface SellerDataProvider
 
     public function importListings(ChannelAccount $account, string $marketplaceId): iterable;
 
+    /**
+     * Stream Orders API v0 orders updated inside the window, order items included.
+     *
+     * @param  array<int, string>  $marketplaceIds
+     * @return iterable<array<string, mixed>>
+     */
+    public function importOrders(ChannelAccount $account, array $marketplaceIds, \DateTimeInterface $updatedAfter, ?\DateTimeInterface $updatedBefore = null): iterable;
+
     public function getCatalogItem(ChannelAccount $account, string $marketplaceId, string $asin): array;
 
     public function getListingItem(ChannelAccount $account, string $marketplaceId, string $sku): array;

@@ -106,7 +106,76 @@ final class FlipkartChannelProvider implements ChannelProvider
 
     public function getOrders(ChannelAccount $account, DateTimeInterface $from, DateTimeInterface $to, array $options = []): iterable
     {
-        throw UnsupportedChannelOperation::for($this->platform(), 'order sync (planned for the orders phase)');
+        // Shipments API v3: paginated search over order items in the window.
+        $body = [
+            'filter' => [
+                'orderDate' => [
+                    'fromDate' => $from->format('Y-m-d\TH:i:s\Z'),
+                    'toDate' => $to->format('Y-m-d\TH:i:s\Z'),
+                ],
+            ],
+            'pagination' => ['pageSize' => 20],
+        ];
+        $url = $this->baseUrl().'/sellers/v3/shipments/filter';
+
+        do {
+            $response = $this->request($account)->post($url, $body);
+
+            if ($response->failed()) {
+                $this->throwForResponse($response->status(), (array) ($response->json() ?? []));
+            }
+
+            $payload = (array) $response->json();
+
+            foreach ((array) ($payload['shipments'] ?? []) as $shipment) {
+                $orderItems = (array) ($shipment['orderItems'] ?? []);
+                $items = array_map(fn (array $item): array => [
+                    'external_id' => $item['fsn'] ?? null,
+                    'sku' => $item['sku'] ?? null,
+                    'name' => $item['title'] ?? null,
+                    'quantity' => (int) ($item['quantity'] ?? 0),
+                    'unit_price' => is_numeric(data_get($item, 'priceComponents.sellingPrice')) ? (float) data_get($item, 'priceComponents.sellingPrice') : null,
+                    'total' => (float) data_get($item, 'priceComponents.totalPrice', 0),
+                ], $orderItems);
+
+                $total = round((float) array_sum(array_column($items, 'total')), 2);
+
+                yield [
+                    'external_order_id' => (string) ($shipment['orderId'] ?? data_get($orderItems, '0.orderId') ?? $shipment['shipmentId'] ?? ''),
+                    'status' => $this->mapOrderStatus((string) ($shipment['status'] ?? data_get($orderItems, '0.status') ?? '')),
+                    'order_date' => (string) (data_get($orderItems, '0.orderDate') ?: $from->format('c')),
+                    'fulfillment_type' => 'platform_fulfilled',
+                    'marketplace_id' => 'flipkart_in',
+                    'items' => $items,
+                    'units' => array_sum(array_column($items, 'quantity')),
+                    'subtotal' => $total,
+                    'tax' => 0.0,
+                    'shipping' => 0.0,
+                    'total' => $total,
+                    'currency' => 'INR',
+                    'customer_city' => data_get($shipment, 'deliveryAddress.city'),
+                    'customer_state' => data_get($shipment, 'deliveryAddress.state'),
+                    'customer_pincode' => data_get($shipment, 'deliveryAddress.pincode'),
+                    'raw' => $shipment,
+                ];
+            }
+
+            $nextUrl = data_get($payload, 'nextPageUrl');
+            $url = $nextUrl ? $this->baseUrl().$nextUrl : null;
+            $body = [];
+        } while ($url);
+    }
+
+    private function mapOrderStatus(string $status): string
+    {
+        return match (strtoupper($status)) {
+            'APPROVED', 'PACKING_IN_PROGRESS', 'PACKED', 'READY_TO_DISPATCH', 'FORM_FAILED' => 'confirmed',
+            'SHIPPED', 'PICKUP_COMPLETE' => 'shipped',
+            'DELIVERED' => 'delivered',
+            'CANCELLED' => 'cancelled',
+            'RETURNED', 'RETURN_REQUESTED' => 'returned',
+            default => 'pending',
+        };
     }
 
     public function updateListing(ChannelAccount $account, Listing $listing, array $patches, array $options = []): array

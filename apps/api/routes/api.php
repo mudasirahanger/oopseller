@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\HealthController;
 use App\Http\Controllers\Api\KeywordProjectController;
 use App\Http\Controllers\Api\ListingAuditController;
 use App\Http\Controllers\Api\ListingController;
+use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\OrganizationController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ReportController;
@@ -66,6 +67,9 @@ Route::prefix('v1')->group(function (): void {
         Route::post('/integrations/channels/{platform}/authorize', [ChannelController::class, 'authorize'])
             ->middleware('throttle:amazon-oauth');
         Route::post('/integrations/channel-accounts/{channelAccount}/sync', [ChannelController::class, 'sync']);
+        Route::post('/integrations/channel-accounts/{channelAccount}/sync-orders', [ChannelController::class, 'syncOrders']);
+        Route::get('/orders', [OrderController::class, 'index']);
+        Route::get('/orders/summary', [OrderController::class, 'summary']);
         Route::delete('/integrations/channel-accounts/{channelAccount}', [ChannelController::class, 'disconnect']);
         Route::get('/integrations/amazon/accounts', [AmazonIntegrationController::class, 'index']);
         Route::post('/integrations/amazon/authorize', [AmazonIntegrationController::class, 'authorizeSeller'])

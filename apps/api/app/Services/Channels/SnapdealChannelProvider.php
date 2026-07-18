@@ -82,7 +82,75 @@ final class SnapdealChannelProvider implements ChannelProvider
 
     public function getOrders(ChannelAccount $account, DateTimeInterface $from, DateTimeInterface $to, array $options = []): iterable
     {
-        throw UnsupportedChannelOperation::for($this->platform(), 'order sync (planned for the orders phase)');
+        $offset = 0;
+        $limit = 50;
+
+        do {
+            $response = $this->request($account)->get($this->baseUrl().'/seller/orders', [
+                'fromDate' => $from->format('Y-m-d'),
+                'toDate' => $to->format('Y-m-d'),
+                'offset' => $offset,
+                'limit' => $limit,
+            ]);
+
+            if ($response->failed()) {
+                throw new ChannelApiException(
+                    $this->platform(),
+                    (string) ($response->json('message') ?: "Snapdeal API request failed with HTTP {$response->status()}."),
+                    $response->status(),
+                );
+            }
+
+            $payload = (array) $response->json();
+            $orders = (array) ($payload['orders'] ?? $payload['data'] ?? []);
+
+            foreach ($orders as $order) {
+                $items = array_map(fn (array $item): array => [
+                    'external_id' => $item['supc'] ?? null,
+                    'sku' => $item['sku'] ?? null,
+                    'name' => $item['productName'] ?? null,
+                    'quantity' => (int) ($item['quantity'] ?? 0),
+                    'unit_price' => is_numeric($item['sellingPrice'] ?? null) ? (float) $item['sellingPrice'] : null,
+                    'total' => (float) ($item['totalPrice'] ?? (($item['sellingPrice'] ?? 0) * ($item['quantity'] ?? 0))),
+                ], (array) ($order['items'] ?? $order['orderItems'] ?? []));
+                $total = (float) ($order['orderAmount'] ?? array_sum(array_column($items, 'total')));
+
+                yield [
+                    'external_order_id' => (string) ($order['orderCode'] ?? $order['id'] ?? ''),
+                    'status' => $this->mapOrderStatus((string) ($order['status'] ?? '')),
+                    'order_date' => (string) ($order['orderDate'] ?? $from->format('c')),
+                    'fulfillment_type' => 'platform_fulfilled',
+                    'marketplace_id' => 'snapdeal_in',
+                    'items' => $items,
+                    'units' => array_sum(array_column($items, 'quantity')),
+                    'subtotal' => round($total, 2),
+                    'tax' => 0.0,
+                    'shipping' => 0.0,
+                    'total' => round($total, 2),
+                    'currency' => 'INR',
+                    'customer_city' => data_get($order, 'shippingAddress.city'),
+                    'customer_state' => data_get($order, 'shippingAddress.state'),
+                    'customer_pincode' => data_get($order, 'shippingAddress.pincode'),
+                    'raw' => $order,
+                ];
+            }
+
+            $offset += $limit;
+            $hasMore = count($orders) === $limit;
+        } while ($hasMore && $offset <= 20000);
+    }
+
+    private function mapOrderStatus(string $status): string
+    {
+        return match (strtolower($status)) {
+            'new', 'pending' => 'pending',
+            'confirmed', 'packed', 'ready_to_ship' => 'confirmed',
+            'shipped', 'in_transit' => 'shipped',
+            'delivered' => 'delivered',
+            'cancelled' => 'cancelled',
+            'returned', 'rto' => 'returned',
+            default => 'pending',
+        };
     }
 
     public function updateListing(ChannelAccount $account, Listing $listing, array $patches, array $options = []): array

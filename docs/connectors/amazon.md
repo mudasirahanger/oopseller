@@ -28,4 +28,8 @@ AMAZON_SPAPI_SANDBOX=false
 
 ## Implemented operations
 
-Sellers marketplace participation, Catalog Items 2022-04-01, Listings Items 2021-08-01 (search/get/patch), Product Type Definitions 2020-09-01, and `VALIDATION_PREVIEW` before every publish. Orders, FBA inventory, Ads, and Brand Analytics are separate roadmap phases.
+Sellers marketplace participation, Catalog Items 2022-04-01, Listings Items 2021-08-01 (search/get/patch), Product Type Definitions 2020-09-01, and `VALIDATION_PREVIEW` before every publish. Order sync is implemented (see below). FBA inventory, Ads, and Brand Analytics are separate roadmap phases.
+
+## Order sync (added in the orders phase)
+
+`getOrders()` is implemented for this connector. Use **Sync orders** on the account card, or rely on the hourly `orders:sync-active-channel-accounts` scheduler. Sync is incremental (continues from the last run with a 24h overlap; first run covers 30 days), upserts into the `orders` table idempotently, and rebuilds the daily `MetricSnapshot` revenue aggregates that power `/orders` and the monthly client reports. Revenue counts only `confirmed`/`shipped`/`delivered` orders; `cancelled`/`returned` are tracked separately.

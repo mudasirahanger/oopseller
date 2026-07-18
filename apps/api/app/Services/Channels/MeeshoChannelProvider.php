@@ -81,7 +81,74 @@ final class MeeshoChannelProvider implements ChannelProvider
 
     public function getOrders(ChannelAccount $account, DateTimeInterface $from, DateTimeInterface $to, array $options = []): iterable
     {
-        throw UnsupportedChannelOperation::for($this->platform(), 'order sync (planned for the orders phase)');
+        $page = 1;
+
+        do {
+            $response = $this->request($account)->get($this->baseUrl().'/api/v1/orders', [
+                'from_date' => $from->format('Y-m-d'),
+                'to_date' => $to->format('Y-m-d'),
+                'page' => $page,
+                'page_size' => 50,
+            ]);
+
+            if ($response->failed()) {
+                throw new ChannelApiException(
+                    $this->platform(),
+                    (string) ($response->json('message') ?: "Meesho API request failed with HTTP {$response->status()}."),
+                    $response->status(),
+                );
+            }
+
+            $payload = (array) $response->json();
+            $orders = (array) ($payload['orders'] ?? $payload['data'] ?? []);
+
+            foreach ($orders as $order) {
+                $items = array_map(fn (array $item): array => [
+                    'external_id' => $item['product_id'] ?? null,
+                    'sku' => $item['sku'] ?? null,
+                    'name' => $item['name'] ?? null,
+                    'quantity' => (int) ($item['quantity'] ?? 0),
+                    'unit_price' => is_numeric($item['price'] ?? null) ? (float) $item['price'] : null,
+                    'total' => (float) ($item['total'] ?? (($item['price'] ?? 0) * ($item['quantity'] ?? 0))),
+                ], (array) ($order['items'] ?? $order['order_items'] ?? []));
+                $total = (float) ($order['total_amount'] ?? array_sum(array_column($items, 'total')));
+
+                yield [
+                    'external_order_id' => (string) ($order['order_id'] ?? $order['id'] ?? ''),
+                    'status' => $this->mapOrderStatus((string) ($order['status'] ?? '')),
+                    'order_date' => (string) ($order['created_at'] ?? $order['order_date'] ?? $from->format('c')),
+                    'fulfillment_type' => 'platform_fulfilled',
+                    'marketplace_id' => 'meesho_in',
+                    'items' => $items,
+                    'units' => array_sum(array_column($items, 'quantity')),
+                    'subtotal' => round($total, 2),
+                    'tax' => 0.0,
+                    'shipping' => 0.0,
+                    'total' => round($total, 2),
+                    'currency' => 'INR',
+                    'customer_city' => data_get($order, 'shipping_address.city'),
+                    'customer_state' => data_get($order, 'shipping_address.state'),
+                    'customer_pincode' => data_get($order, 'shipping_address.pincode'),
+                    'raw' => $order,
+                ];
+            }
+
+            $hasMore = count($orders) === 50 && (bool) ($payload['has_more'] ?? true);
+            $page++;
+        } while ($hasMore && $page <= 200);
+    }
+
+    private function mapOrderStatus(string $status): string
+    {
+        return match (strtolower($status)) {
+            'pending', 'created' => 'pending',
+            'accepted', 'ready_to_ship', 'packed' => 'confirmed',
+            'shipped', 'in_transit', 'out_for_delivery' => 'shipped',
+            'delivered' => 'delivered',
+            'cancelled' => 'cancelled',
+            'return_requested', 'returned', 'rto' => 'returned',
+            default => 'pending',
+        };
     }
 
     public function updateListing(ChannelAccount $account, Listing $listing, array $patches, array $options = []): array

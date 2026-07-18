@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Enums\Platform;
 use App\Http\Controllers\Controller;
 use App\Jobs\Channels\SyncChannelListings;
+use App\Jobs\Channels\SyncChannelOrders;
 use App\Models\ChannelAccount;
 use App\Models\ChannelSyncRun;
 use App\Models\Client;
@@ -177,6 +178,37 @@ class ChannelController extends Controller
                 'message' => "{$enum->label()} authorization failed. Try connecting the seller account again.",
             ]);
         }
+    }
+
+    public function syncOrders(Request $request, ChannelAccount $channelAccount): JsonResponse
+    {
+        $this->assertAccountAccess($request, $channelAccount);
+        abort_unless($channelAccount->status === 'active', 422, 'This channel account is not active.');
+
+        $pending = ChannelSyncRun::query()
+            ->where('channel_account_id', $channelAccount->id)
+            ->where('type', 'orders')
+            ->whereIn('status', ['queued', 'running'])
+            ->where('created_at', '>=', now()->subMinutes(30))
+            ->latest()
+            ->first();
+
+        if ($pending) {
+            return response()->json(['data' => $pending], 202);
+        }
+
+        $run = ChannelSyncRun::create([
+            'organization_id' => $channelAccount->organization_id,
+            'client_id' => $channelAccount->client_id,
+            'platform' => $channelAccount->platform,
+            'channel_account_id' => $channelAccount->id,
+            'marketplace_id' => $channelAccount->platform,
+            'type' => 'orders',
+            'status' => 'queued',
+        ]);
+        SyncChannelOrders::dispatch($channelAccount->id, $run->id);
+
+        return response()->json(['data' => $run], 202);
     }
 
     public function sync(Request $request, ChannelAccount $channelAccount): JsonResponse

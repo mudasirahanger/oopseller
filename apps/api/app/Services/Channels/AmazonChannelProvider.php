@@ -59,7 +59,75 @@ final class AmazonChannelProvider implements ChannelProvider
 
     public function getOrders(ChannelAccount $account, DateTimeInterface $from, DateTimeInterface $to, array $options = []): iterable
     {
-        throw UnsupportedChannelOperation::for($this->platform(), 'order sync');
+        $marketplaceIds = (array) ($options['marketplace_ids'] ?? []);
+
+        if ($marketplaceIds === []) {
+            $marketplaceIds = $account->marketplaces()
+                ->wherePivot('enabled', true)
+                ->pluck('amazon_marketplace_id')
+                ->all();
+        }
+
+        abort_unless($marketplaceIds !== [], 422, 'No enabled Amazon marketplaces for this account.');
+
+        foreach ($this->amazon->importOrders($account, $marketplaceIds, $from, $to) as $order) {
+            $items = array_map(fn (array $item): array => [
+                'external_id' => $item['ASIN'] ?? null,
+                'sku' => $item['SellerSKU'] ?? null,
+                'name' => $item['Title'] ?? null,
+                'quantity' => (int) ($item['QuantityOrdered'] ?? 0),
+                'unit_price' => $this->itemUnitPrice($item),
+                'total' => (float) data_get($item, 'ItemPrice.Amount', 0),
+            ], (array) ($order['OrderItems'] ?? []));
+
+            $units = array_sum(array_column($items, 'quantity'));
+            $subtotal = round((float) array_sum(array_column($items, 'total')), 2);
+            $tax = round((float) array_sum(array_map(fn (array $item): float => (float) data_get($item, 'ItemTax.Amount', 0), (array) ($order['OrderItems'] ?? []))), 2);
+            $shipping = round((float) array_sum(array_map(fn (array $item): float => (float) data_get($item, 'ShippingPrice.Amount', 0), (array) ($order['OrderItems'] ?? []))), 2);
+
+            yield [
+                'external_order_id' => (string) $order['AmazonOrderId'],
+                'status' => $this->mapOrderStatus((string) ($order['OrderStatus'] ?? '')),
+                'order_date' => (string) ($order['PurchaseDate'] ?? now()->toIso8601String()),
+                'fulfillment_type' => match ($order['FulfillmentChannel'] ?? null) {
+                    'AFN' => 'FBA',
+                    'MFN' => 'FBM',
+                    default => null,
+                },
+                'marketplace_id' => $order['MarketplaceId'] ?? null,
+                'items' => $items,
+                'units' => $units,
+                'subtotal' => $subtotal,
+                'tax' => $tax,
+                'shipping' => $shipping,
+                'total' => (float) data_get($order, 'OrderTotal.Amount', $subtotal + $tax + $shipping),
+                'currency' => (string) data_get($order, 'OrderTotal.CurrencyCode', 'INR'),
+                'customer_city' => data_get($order, 'ShippingAddress.City'),
+                'customer_state' => data_get($order, 'ShippingAddress.StateOrRegion'),
+                'customer_pincode' => data_get($order, 'ShippingAddress.PostalCode'),
+                'raw' => $order,
+            ];
+        }
+    }
+
+    /** @param array<string, mixed> $item */
+    private function itemUnitPrice(array $item): ?float
+    {
+        $quantity = (int) ($item['QuantityOrdered'] ?? 0);
+        $total = (float) data_get($item, 'ItemPrice.Amount', 0);
+
+        return $quantity > 0 ? round($total / $quantity, 2) : null;
+    }
+
+    private function mapOrderStatus(string $status): string
+    {
+        return match ($status) {
+            'Pending', 'PendingAvailability' => 'pending',
+            'Unshipped', 'PartiallyShipped' => 'confirmed',
+            'Shipped', 'InvoiceUnconfirmed' => 'shipped',
+            'Canceled', 'Unfulfillable' => 'cancelled',
+            default => 'pending',
+        };
     }
 
     public function updateListing(ChannelAccount $account, Listing $listing, array $patches, array $options = []): array

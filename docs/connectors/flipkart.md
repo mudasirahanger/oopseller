@@ -30,8 +30,12 @@ Until these are set the Integration Hub shows Flipkart as **Needs configuration*
 
 - Listings are pulled through the Listings v3 search endpoint with pagination and mapped into products (`platform=flipkart`, `external_id=FSN`) and listings (`marketplace_id=flipkart_in`). Price/currency land in `listings.attributes`.
 - Access tokens are cached for 50 minutes and refreshed with the stored refresh token.
-- Orders/inventory/listing updates deliberately throw `UnsupportedChannelOperation` until their phases ship.
+- Inventory and listing updates throw `UnsupportedChannelOperation` until their phases ship (order sync is implemented — see below).
 
 ## Caveats
 
 - Flipkart seller API access requires approval on their side; endpoints may differ per program tier. The adapter isolates every Flipkart HTTP call, so path adjustments touch only this one class.
+
+## Order sync (added in the orders phase)
+
+`getOrders()` is implemented for this connector. Use **Sync orders** on the account card, or rely on the hourly `orders:sync-active-channel-accounts` scheduler. Sync is incremental (continues from the last run with a 24h overlap; first run covers 30 days), upserts into the `orders` table idempotently, and rebuilds the daily `MetricSnapshot` revenue aggregates that power `/orders` and the monthly client reports. Revenue counts only `confirmed`/`shipped`/`delivered` orders; `cancelled`/`returned` are tracked separately.

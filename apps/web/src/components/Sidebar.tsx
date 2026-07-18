@@ -9,6 +9,7 @@ const links = [
   ["Overview", "/"],
   ["Clients", "/clients"],
   ["Products", "/products"],
+  ["Orders & revenue", "/orders"],
   ["Listing optimizer", "/listing-optimizer"],
   ["Keywords & rankings", "/keywords"],
   ["Competitors", "/competitors"],
