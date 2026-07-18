@@ -118,3 +118,4 @@
 .swatch{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:middle}
 @media (prefers-color-scheme:dark){.vizRoot{--series-1:#3987e5;--series-2:#199e70;--series-3:#c98500;--series-4:#008300;--series-5:#9085e9;--viz-grid:#2a302c;--viz-axis:#9aa8a0}.chartArea{opacity:.18}}
 @media(max-width:900px){.ordersTwoCol{grid-template-columns:1fr}}
+.emptyStateAction{display:inline-block;margin-top:16px;text-decoration:none}
