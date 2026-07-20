@@ -153,7 +153,9 @@ final class SpApiSellerDataProvider implements SellerDataProvider
         } catch (AmazonSpApiException $exception) {
             $isSandbox = (bool) ($account->metadata['sandbox'] ?? config('services.amazon.sandbox'));
             if ($isSandbox && str_contains($exception->getMessage(), 'Could not match input arguments')) {
-                abort(422, 'Cannot manually import this ASIN in Sandbox mode. Amazon Sandbox only supports specific hardcoded mock ASINs. Reconnect your account without Sandbox to import real products.');
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'asin' => 'Cannot manually import this ASIN in Sandbox mode. Amazon Sandbox only supports specific hardcoded mock ASINs. Reconnect your account without Sandbox to import real products.'
+                ]);
             }
             throw $exception;
         }
@@ -177,7 +179,9 @@ final class SpApiSellerDataProvider implements SellerDataProvider
         } catch (AmazonSpApiException $exception) {
             $isSandbox = (bool) ($account->metadata['sandbox'] ?? config('services.amazon.sandbox'));
             if ($isSandbox && str_contains($exception->getMessage(), 'Could not match input arguments')) {
-                abort(422, 'Cannot manually fetch this SKU in Sandbox mode. Amazon Sandbox only supports specific hardcoded mock SKUs. Reconnect your account without Sandbox to interact with real listings.');
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'sku' => 'Cannot manually fetch this SKU in Sandbox mode. Amazon Sandbox only supports specific hardcoded mock SKUs. Reconnect your account without Sandbox to interact with real listings.'
+                ]);
             }
             throw $exception;
         }
