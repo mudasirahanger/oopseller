@@ -48,7 +48,13 @@ final class AmazonConfiguration
         }
     }
 
-    public function endpoint(string $region): string
+    /**
+     * $sandbox is per-account (ChannelAccount.metadata['sandbox']), falling
+     * back to the AMAZON_SPAPI_SANDBOX server default at the call site —
+     * this lets a sandbox test account and a real account coexist rather
+     * than sandbox being an all-or-nothing server setting.
+     */
+    public function endpoint(string $region, bool $sandbox = false): string
     {
         $endpoint = self::API_ENDPOINTS[strtolower($region)] ?? null;
 
@@ -56,7 +62,7 @@ final class AmazonConfiguration
             throw new RuntimeException("Unsupported Amazon SP-API region [{$region}].");
         }
 
-        if (config('services.amazon.sandbox')) {
+        if ($sandbox) {
             return preg_replace('#^https://#', 'https://sandbox.', $endpoint) ?: $endpoint;
         }
 

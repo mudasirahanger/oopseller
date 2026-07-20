@@ -42,7 +42,8 @@ final class AmazonSpApiClient
     private function send(ChannelAccount $account, string $method, string $path, array $query = [], array $json = []): array
     {
         $this->configuration->assertConfigured();
-        $url = rtrim($this->configuration->endpoint($account->region), '/').'/'.ltrim($path, '/');
+        $sandbox = (bool) ($account->metadata['sandbox'] ?? config('services.amazon.sandbox'));
+        $url = rtrim($this->configuration->endpoint($account->region, $sandbox), '/').'/'.ltrim($path, '/');
 
         $request = $this->request($account);
         $options = ['query' => $this->normalizeQuery($query)];

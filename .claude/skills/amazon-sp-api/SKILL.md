@@ -88,8 +88,13 @@ machinery — only how `refresh_token` gets populated differs.
   The reference MCP queues requests per endpoint — mirror that if we add bulk sync.
 - **Money:** decimals, never floats in the DB; currency from the payload
   (`OrderTotal.CurrencyCode`), default `INR`.
-- **Regions:** `AmazonConfiguration::endpoint($region)` (na/eu/fe); sandbox via
-  `AMAZON_SPAPI_SANDBOX`.
+- **Regions:** `AmazonConfiguration::endpoint($region, $sandbox)` (na/eu/fe).
+  Sandbox is **per-account** (`ChannelAccount.metadata['sandbox']`), read in
+  `AmazonSpApiClient::send()` and falling back to the `AMAZON_SPAPI_SANDBOX`
+  server default only when the account has no explicit value — a sandbox test
+  account and a real account can be connected simultaneously; it is not a
+  global on/off switch. Both `authorizeSeller`/`callback` (OAuth) and
+  `connectManually` accept a `sandbox` boolean and persist it to metadata.
 - **Secrets:** LWA client id/secret and refresh tokens are config/encrypted —
   never log them; never hardcode. Rotate if leaked.
 

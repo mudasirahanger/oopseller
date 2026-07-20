@@ -37,6 +37,36 @@ class AmazonManualConnectTest extends TestCase
         $this->assertSame('A1SELLERTEST', $account->account_identifier);
         $this->assertSame('manual_refresh_token', $account->metadata['connected_via']);
         $this->assertSame('Atzr|IwEBIExampleRefreshTokenValueLongEnough', $account->refresh_token);
+        $this->assertFalse($account->metadata['sandbox']);
+    }
+
+    public function test_sandbox_flag_is_per_account_not_global(): void
+    {
+        $this->bindStubProvider(shouldFail: false);
+        [, $organization, $headers] = $this->agencyUser('owner');
+        $client = $this->makeClient($organization);
+        $this->seedMarketplace();
+
+        $this->withHeaders($headers)->postJson('/api/v1/integrations/amazon/accounts/manual', [
+            'client_id' => $client->id,
+            'marketplace_id' => 'A21TJRUUN4KGV',
+            'seller_id' => 'A1SANDBOXTEST',
+            'refresh_token' => 'Atzr|IwEBISandboxRefreshTokenValueLongEnough',
+            'sandbox' => true,
+        ])->assertCreated();
+
+        $sandboxAccount = AmazonAccount::where('account_identifier', 'A1SANDBOXTEST')->firstOrFail();
+        $this->assertTrue($sandboxAccount->metadata['sandbox']);
+
+        $this->withHeaders($headers)->postJson('/api/v1/integrations/amazon/accounts/manual', [
+            'client_id' => $client->id,
+            'marketplace_id' => 'A21TJRUUN4KGV',
+            'seller_id' => 'A1LIVETEST',
+            'refresh_token' => 'Atzr|IwEBILiveRefreshTokenValueLongEnough',
+        ])->assertCreated();
+
+        $liveAccount = AmazonAccount::where('account_identifier', 'A1LIVETEST')->firstOrFail();
+        $this->assertFalse($liveAccount->metadata['sandbox']);
     }
 
     public function test_invalid_refresh_token_is_rejected_and_no_account_is_left_behind(): void

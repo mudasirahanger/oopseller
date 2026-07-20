@@ -53,6 +53,23 @@ authorisation using OAuth"), because Private apps have no such fields at all.
    422 and no row is left behind — then stores it encrypted (same as the OAuth
    path) and queues the initial listing sync. Owner/admin role required.
 
+## Sandbox testing
+
+Both connect modes have a **Use Sandbox environment** checkbox. This routes
+that specific account's SP-API calls to Amazon's sandbox host
+(`sandbox.sellingpartnerapi-*.amazon.com`, static test data, no real seller
+data touched) instead of production. It's **per-account**, stored on
+`channel_accounts.metadata.sandbox` and read at request time in
+`AmazonSpApiClient::send()` — falling back to the server-wide
+`AMAZON_SPAPI_SANDBOX` default only when an account has no explicit value. This
+means a sandbox test account and a real connected account can coexist; you are
+not forced to flip a global server setting to test.
+
+Getting a refresh token for a sandbox account works the same way as for a
+Private app (self-authorization in Seller Central) — Amazon does not require a
+separate app registration for sandbox access, only a valid LWA app and access
+token; which host receives the calls is entirely determined by this flag.
+
 ## Implemented operations
 
 Sellers marketplace participation, Catalog Items 2022-04-01, Listings Items 2021-08-01 (search/get/patch), Product Type Definitions 2020-09-01, and `VALIDATION_PREVIEW` before every publish. Order sync is implemented (see below). FBA inventory, Ads, and Brand Analytics are separate roadmap phases.

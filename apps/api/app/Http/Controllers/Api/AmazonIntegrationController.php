@@ -34,6 +34,7 @@ class AmazonIntegrationController extends Controller
                 'configured' => $this->isConfigured(),
                 'draft_mode' => (bool) config('services.amazon.authorization_draft'),
                 'redirect_uri' => config('services.amazon.redirect_uri'),
+                'sandbox_default' => (bool) config('services.amazon.sandbox'),
             ],
         ]);
     }
@@ -49,6 +50,7 @@ class AmazonIntegrationController extends Controller
             'client_id' => ['required', 'integer', 'exists:clients,id'],
             'marketplace_id' => ['required', 'string', 'exists:marketplaces,amazon_marketplace_id'],
             'draft' => ['sometimes', 'boolean'],
+            'sandbox' => ['sometimes', 'boolean'],
         ]);
         $organizationId = (int) $request->attributes->get('organization_id');
         $client = Client::where('organization_id', $organizationId)->findOrFail($data['client_id']);
@@ -61,6 +63,7 @@ class AmazonIntegrationController extends Controller
             'user_id' => $request->user()->id,
             'marketplace_id' => $marketplace->amazon_marketplace_id,
             'region' => $marketplace->region,
+            'sandbox' => (bool) ($data['sandbox'] ?? config('services.amazon.sandbox')),
         ], now()->addMinutes(15));
 
         return response()->json([
@@ -119,7 +122,7 @@ class AmazonIntegrationController extends Controller
                     'status' => 'active',
                     'authorized_at' => now(),
                     'last_sync_error' => null,
-                    'metadata' => ['initial_marketplace_id' => $state['marketplace_id']],
+                    'metadata' => ['initial_marketplace_id' => $state['marketplace_id'], 'sandbox' => (bool) ($state['sandbox'] ?? false)],
                 ],
             );
 
@@ -157,6 +160,7 @@ class AmazonIntegrationController extends Controller
             'marketplace_id' => ['required', 'string', 'exists:marketplaces,amazon_marketplace_id'],
             'seller_id' => ['required', 'string', 'max:100'],
             'refresh_token' => ['required', 'string', 'min:20'],
+            'sandbox' => ['sometimes', 'boolean'],
         ]);
         $organizationId = (int) $request->attributes->get('organization_id');
         $client = Client::where('organization_id', $organizationId)->findOrFail($data['client_id']);
@@ -185,7 +189,11 @@ class AmazonIntegrationController extends Controller
                 'status' => 'active',
                 'authorized_at' => now(),
                 'last_sync_error' => null,
-                'metadata' => ['initial_marketplace_id' => $marketplace->amazon_marketplace_id, 'connected_via' => 'manual_refresh_token'],
+                'metadata' => [
+                    'initial_marketplace_id' => $marketplace->amazon_marketplace_id,
+                    'connected_via' => 'manual_refresh_token',
+                    'sandbox' => (bool) ($data['sandbox'] ?? config('services.amazon.sandbox')),
+                ],
             ],
         );
         Cache::forget('amazon_lwa_access_token:'.$account->id);
