@@ -82,6 +82,13 @@ final class AmazonCatalogSyncService
         abort_unless($account && $account->status === 'active', 422, 'The product is not connected to an active Amazon seller account.');
         abort_unless($account->marketplaces()->where('amazon_marketplace_id', $marketplaceId)->wherePivot('enabled', true)->exists(), 422, 'This marketplace is not enabled for the Amazon account.');
 
+        $isSandbox = (bool) ($account->metadata['sandbox'] ?? config('services.amazon.sandbox'));
+        if ($isSandbox) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'asin' => 'Cannot refresh products from Amazon while in Sandbox mode. Reconnect your account without Sandbox to pull live data.'
+            ]);
+        }
+
         return $this->importCatalogItem($account, $marketplaceId, $product->asin, $sellerSku ?: $product->sku);
     }
 

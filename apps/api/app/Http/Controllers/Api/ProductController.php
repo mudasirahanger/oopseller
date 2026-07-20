@@ -72,6 +72,13 @@ class ProductController extends Controller
                 ->findOrFail($data['channel_account_id']);
             abort_unless($account->marketplaces()->where('amazon_marketplace_id', $data['marketplace_id'])->wherePivot('enabled', true)->exists(), 422, 'This marketplace is not enabled for the selected Amazon account.');
 
+            $isSandbox = (bool) ($account->metadata['sandbox'] ?? config('services.amazon.sandbox'));
+            if ($isSandbox) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'asin' => 'Cannot manually import products while in Sandbox mode. Please reconnect in Production mode to import real Amazon catalog data.'
+                ]);
+            }
+
             return response()->json([
                 'data' => $amazon->importCatalogItem($account, $data['marketplace_id'], strtoupper($data['asin']), $data['sku'] ?? null),
             ], 201);
