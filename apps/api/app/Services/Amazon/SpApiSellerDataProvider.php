@@ -139,32 +139,48 @@ final class SpApiSellerDataProvider implements SellerDataProvider
     {
         $region = Marketplace::where('amazon_marketplace_id', $marketplaceId)->value('region') ?? $account->region;
 
-        return $this->client->get(
-            $account,
-            '/catalog/2022-04-01/items/'.rawurlencode($asin),
-            [
-                'marketplaceIds' => $marketplaceId,
-                'includedData' => ['attributes', 'classifications', 'dimensions', 'identifiers', 'images', 'productTypes', 'relationships', 'salesRanks', 'summaries'],
-                'locale' => $this->localeForMarketplace($marketplaceId),
-            ],
-            $region
-        );
+        try {
+            return $this->client->get(
+                $account,
+                '/catalog/2022-04-01/items/'.rawurlencode($asin),
+                [
+                    'marketplaceIds' => $marketplaceId,
+                    'includedData' => ['attributes', 'classifications', 'dimensions', 'identifiers', 'images', 'productTypes', 'relationships', 'salesRanks', 'summaries'],
+                    'locale' => $this->localeForMarketplace($marketplaceId),
+                ],
+                $region
+            );
+        } catch (AmazonSpApiException $exception) {
+            $isSandbox = (bool) ($account->metadata['sandbox'] ?? config('services.amazon.sandbox'));
+            if ($isSandbox && str_contains($exception->getMessage(), 'Could not match input arguments')) {
+                abort(422, 'Cannot manually import this ASIN in Sandbox mode. Amazon Sandbox only supports specific hardcoded mock ASINs. Reconnect your account without Sandbox to import real products.');
+            }
+            throw $exception;
+        }
     }
 
     public function getListingItem(ChannelAccount $account, string $marketplaceId, string $sku): array
     {
         $region = Marketplace::where('amazon_marketplace_id', $marketplaceId)->value('region') ?? $account->region;
 
-        return $this->client->get(
-            $account,
-            '/listings/2021-08-01/items/'.rawurlencode((string) $account->account_identifier).'/'.rawurlencode($sku),
-            [
-                'marketplaceIds' => $marketplaceId,
-                'includedData' => ['summaries', 'attributes', 'issues', 'offers', 'fulfillmentAvailability', 'relationships', 'productTypes'],
-                'issueLocale' => $this->localeForMarketplace($marketplaceId),
-            ],
-            $region
-        );
+        try {
+            return $this->client->get(
+                $account,
+                '/listings/2021-08-01/items/'.rawurlencode((string) $account->account_identifier).'/'.rawurlencode($sku),
+                [
+                    'marketplaceIds' => $marketplaceId,
+                    'includedData' => ['summaries', 'attributes', 'issues', 'offers', 'fulfillmentAvailability', 'relationships', 'productTypes'],
+                    'issueLocale' => $this->localeForMarketplace($marketplaceId),
+                ],
+                $region
+            );
+        } catch (AmazonSpApiException $exception) {
+            $isSandbox = (bool) ($account->metadata['sandbox'] ?? config('services.amazon.sandbox'));
+            if ($isSandbox && str_contains($exception->getMessage(), 'Could not match input arguments')) {
+                abort(422, 'Cannot manually fetch this SKU in Sandbox mode. Amazon Sandbox only supports specific hardcoded mock SKUs. Reconnect your account without Sandbox to interact with real listings.');
+            }
+            throw $exception;
+        }
     }
 
     public function getProductTypeDefinition(ChannelAccount $account, string $marketplaceId, string $productType): array
