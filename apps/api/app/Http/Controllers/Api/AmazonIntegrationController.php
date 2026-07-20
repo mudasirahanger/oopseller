@@ -317,9 +317,18 @@ class AmazonIntegrationController extends Controller
             'status' => 'queued',
         ]);
 
-        SyncAmazonListings::dispatch($account->id, $marketplaceId, $run->id);
+        try {
+            SyncAmazonListings::dispatch($account->id, $marketplaceId, $run->id);
+        } catch (Throwable $exception) {
+            // On QUEUE_CONNECTION=sync, dispatch() runs the job inline and
+            // AmazonCatalogSyncService re-throws on failure so a real queue
+            // worker can retry it; it already marks $run failed before doing
+            // so. Swallow it here so a sync failure doesn't crash whichever
+            // request triggered it (e.g. right after connecting an account).
+            report($exception);
+        }
 
-        return $run;
+        return $run->fresh();
     }
 
     private function assertAccountAccess(Request $request, AmazonAccount $account): void

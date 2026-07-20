@@ -4,6 +4,7 @@ namespace App\Services\Amazon;
 
 use App\Models\ChannelAccount;
 use App\Services\Amazon\Exceptions\AmazonSpApiException;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
@@ -46,15 +47,26 @@ final class AmazonLwaClient
 
     private function tokenRequest(array $payload): array
     {
-        $response = Http::asForm()
-            ->acceptJson()
-            ->timeout(20)
-            ->retry(2, 400)
-            ->post(self::TOKEN_URL, [
-                ...$payload,
-                'client_id' => config('services.amazon.lwa_client_id'),
-                'client_secret' => config('services.amazon.lwa_client_secret'),
-            ]);
+        try {
+            $response = Http::asForm()
+                ->acceptJson()
+                ->timeout(20)
+                ->retry(2, 400, throw: false)
+                ->post(self::TOKEN_URL, [
+                    ...$payload,
+                    'client_id' => config('services.amazon.lwa_client_id'),
+                    'client_secret' => config('services.amazon.lwa_client_secret'),
+                ]);
+        } catch (ConnectionException $exception) {
+            // retry(..., throw: false) suppresses re-throwing a failed HTTP
+            // *response*, but a pure connection failure (DNS, TLS, timeout —
+            // no response ever received) can still surface as a raw
+            // ConnectionException. Convert it so callers only ever have to
+            // catch AmazonSpApiException.
+            throw new AmazonSpApiException(
+                "Could not reach Amazon's authorization servers: {$exception->getMessage()}",
+            );
+        }
 
         if ($response->failed()) {
             throw new AmazonSpApiException(

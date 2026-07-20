@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\AmazonAccount;
 use App\Models\ChannelAccount;
+use App\Models\ChannelSyncRun;
 use App\Models\Client;
 use App\Models\Marketplace;
 use App\Models\Organization;
@@ -111,6 +112,89 @@ class AmazonManualConnectTest extends TestCase
         ])->assertForbidden();
 
         $this->assertSame(0, AmazonAccount::count());
+    }
+
+    public function test_connect_succeeds_even_if_the_synchronous_initial_sync_fails(): void
+    {
+        // QUEUE_CONNECTION=sync (as in this test env and on shared hosting)
+        // runs the listing-sync job inline; AmazonCatalogSyncService
+        // intentionally re-throws on failure for a real queue worker to see
+        // a failed job. connectManually() must not let that crash the
+        // connection itself — the refresh token was valid and the account
+        // should stay connected even though the first sync attempt failed.
+        $this->bindStubProviderWithFailingSync();
+        [, $organization, $headers] = $this->agencyUser('owner');
+        $client = $this->makeClient($organization);
+        $this->seedMarketplace();
+
+        $this->withHeaders($headers)->postJson('/api/v1/integrations/amazon/accounts/manual', [
+            'client_id' => $client->id,
+            'marketplace_id' => 'A21TJRUUN4KGV',
+            'seller_id' => 'A1SYNCFAILTEST',
+            'refresh_token' => 'Atzr|IwEBISyncFailRefreshTokenValueLongEnough',
+        ])->assertCreated();
+
+        $account = AmazonAccount::where('account_identifier', 'A1SYNCFAILTEST')->firstOrFail();
+        $this->assertSame('active', $account->status);
+
+        $run = ChannelSyncRun::where('channel_account_id', $account->id)->latest()->firstOrFail();
+        $this->assertSame('failed', $run->status);
+    }
+
+    private function bindStubProviderWithFailingSync(): void
+    {
+        $this->app->bind(SellerDataProvider::class, fn () => new class implements SellerDataProvider
+        {
+            public function authorizationUrl(string $state, Marketplace $marketplace, bool $draft = false): string
+            {
+                return 'https://example.test/consent';
+            }
+
+            public function exchangeAuthorizationCode(string $code): array
+            {
+                return [];
+            }
+
+            public function marketplaceParticipations(ChannelAccount $account): array
+            {
+                return [];
+            }
+
+            public function importListings(ChannelAccount $account, string $marketplaceId): iterable
+            {
+                throw new \RuntimeException('Simulated listing sync failure.');
+            }
+
+            public function importOrders(ChannelAccount $account, array $marketplaceIds, DateTimeInterface $updatedAfter, ?DateTimeInterface $updatedBefore = null): iterable
+            {
+                return [];
+            }
+
+            public function getCatalogItem(ChannelAccount $account, string $marketplaceId, string $asin): array
+            {
+                return [];
+            }
+
+            public function getListingItem(ChannelAccount $account, string $marketplaceId, string $sku): array
+            {
+                return [];
+            }
+
+            public function getProductTypeDefinition(ChannelAccount $account, string $marketplaceId, string $productType): array
+            {
+                return [];
+            }
+
+            public function previewListingPatch(ChannelAccount $account, string $marketplaceId, string $sku, string $productType, array $patches): array
+            {
+                return [];
+            }
+
+            public function publishListingPatch(ChannelAccount $account, string $marketplaceId, string $sku, string $productType, array $patches): array
+            {
+                return [];
+            }
+        });
     }
 
     private function bindStubProvider(bool $shouldFail): void

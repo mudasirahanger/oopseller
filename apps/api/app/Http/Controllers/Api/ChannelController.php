@@ -206,9 +206,15 @@ class ChannelController extends Controller
             'type' => 'orders',
             'status' => 'queued',
         ]);
-        SyncChannelOrders::dispatch($channelAccount->id, $run->id);
 
-        return response()->json(['data' => $run], 202);
+        try {
+            SyncChannelOrders::dispatch($channelAccount->id, $run->id);
+        } catch (Throwable $exception) {
+            // See AmazonIntegrationController::queueSync().
+            report($exception);
+        }
+
+        return response()->json(['data' => $run->fresh()], 202);
     }
 
     public function sync(Request $request, ChannelAccount $channelAccount): JsonResponse
@@ -257,9 +263,17 @@ class ChannelController extends Controller
             'status' => 'queued',
         ]);
 
-        SyncChannelListings::dispatch($account->id, $run->id);
+        try {
+            SyncChannelListings::dispatch($account->id, $run->id);
+        } catch (Throwable $exception) {
+            // See AmazonIntegrationController::queueSync() — under
+            // QUEUE_CONNECTION=sync the job runs inline and re-throws on
+            // failure after already marking $run failed; don't let that
+            // crash whichever request triggered the sync.
+            report($exception);
+        }
 
-        return $run;
+        return $run->fresh();
     }
 
     private function resolvePlatform(string $platform, ChannelManager $channels): Platform
