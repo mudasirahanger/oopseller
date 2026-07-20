@@ -278,6 +278,11 @@ class AmazonIntegrationController extends Controller
                 $ids[$marketplace->id] = ['enabled' => (bool) data_get($participation, 'participation.isParticipating', true)];
             }
 
+            $fallback = Marketplace::where('amazon_marketplace_id', $fallbackMarketplaceId)->first();
+            if ($fallback && !isset($ids[$fallback->id])) {
+                $ids[$fallback->id] = ['enabled' => true];
+            }
+
             if ($ids !== []) {
                 $account->marketplaces()->sync($ids);
 
