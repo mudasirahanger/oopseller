@@ -9,12 +9,20 @@ use App\Services\Channels\Contracts\ChannelProvider;
 use App\Services\Channels\Exceptions\ChannelApiException;
 use App\Services\Channels\Exceptions\UnsupportedChannelOperation;
 use DateTimeInterface;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
-// Flipkart Marketplace Seller API adapter. Auth is OAuth 2.0 against the
-// Flipkart API gateway; listings are Listings API v3 (FSN/SKU based).
+// Flipkart Marketplace Seller API adapter (per the official FMS API docs at
+// seller.flipkart.com/api-docs). Flipkart has two application types:
+// - Third-party (Partner Dashboard): authorization-code OAuth with seller
+//   consent (authorizationUrl/exchangeCode below, server-level app creds).
+// - Self-access (Seller Dashboard > Developer Access): the seller's own
+//   app_id/app_secret with grant_type=client_credentials — no consent screen.
+//   Using self-access credentials on the consent URL is rejected by Flipkart
+//   with its generic "Oops! Something went wrong" page.
+// Listings are Listings API v3 (FSN/SKU based).
 final class FlipkartChannelProvider implements ChannelProvider
 {
     public function platform(): Platform
@@ -24,14 +32,21 @@ final class FlipkartChannelProvider implements ChannelProvider
 
     public function isConfigured(): bool
     {
-        return filled(config('services.flipkart.client_id'))
-            && filled(config('services.flipkart.client_secret'))
-            && filled(config('services.flipkart.redirect_uri'));
+        // Self-access (per-account app credentials) needs no server-level
+        // configuration; the OAuth partner flow separately requires the
+        // FLIPKART_* env vars and reports its own error when missing.
+        return true;
     }
 
     public function authorizationUrl(string $state, array $options = []): ?string
     {
-        abort_unless($this->isConfigured(), 422, 'Flipkart API credentials are not configured on the server.');
+        abort_unless(
+            filled(config('services.flipkart.client_id'))
+                && filled(config('services.flipkart.client_secret'))
+                && filled(config('services.flipkart.redirect_uri')),
+            422,
+            'Flipkart partner-app credentials are not configured on the server. Connect with self-access app credentials instead, or set FLIPKART_CLIENT_ID/SECRET/REDIRECT_URI.',
+        );
 
         return $this->baseUrl().'/oauth-service/oauth/authorize?'.http_build_query([
             'client_id' => config('services.flipkart.client_id'),
@@ -42,29 +57,28 @@ final class FlipkartChannelProvider implements ChannelProvider
         ], '', '&', PHP_QUERY_RFC3986);
     }
 
-    public function exchangeCode(string $code): array
+    public function exchangeCode(string $code, array $options = []): array
     {
-        $response = Http::asForm()
-            ->withBasicAuth((string) config('services.flipkart.client_id'), (string) config('services.flipkart.client_secret'))
-            ->acceptJson()
-            ->timeout((int) config('services.flipkart.timeout', 30))
-            ->retry(2, 400, throw: false)
-            ->get($this->baseUrl().'/oauth-service/oauth/token', [
+        $data = $this->tokenRequest(
+            (string) config('services.flipkart.client_id'),
+            (string) config('services.flipkart.client_secret'),
+            array_filter([
                 'grant_type' => 'authorization_code',
                 'code' => $code,
                 'redirect_uri' => config('services.flipkart.redirect_uri'),
-                'state' => 'token-exchange',
-            ]);
+                // The docs include the original state in the token request.
+                'state' => $options['state'] ?? null,
+            ]),
+        );
 
-        if ($response->failed() || blank($response->json('access_token'))) {
-            throw new ChannelApiException(
-                $this->platform(),
-                (string) ($response->json('error_description') ?: 'Flipkart token exchange failed.'),
-                $response->status(),
-            );
-        }
+        return $data;
+    }
 
-        return (array) $response->json();
+    public function verifyCredentials(ChannelAccount $account): void
+    {
+        Cache::forget('flipkart_access_token:'.$account->getKey());
+        // Throws ChannelApiException when Flipkart rejects the credentials.
+        $this->accessToken($account);
     }
 
     public function syncListings(ChannelAccount $account, array $options = []): iterable
@@ -200,28 +214,60 @@ final class FlipkartChannelProvider implements ChannelProvider
 
     private function accessToken(ChannelAccount $account): string
     {
-        if (blank($account->refresh_token)) {
-            throw new ChannelApiException($this->platform(), 'This Flipkart account has no refresh token. Reconnect the seller account.');
+        $credentials = (array) $account->credentials;
+        $selfAccess = filled($credentials['app_id'] ?? null) && filled($credentials['app_secret'] ?? null);
+
+        if (! $selfAccess && blank($account->refresh_token)) {
+            throw new ChannelApiException($this->platform(), 'This Flipkart account has no credentials. Reconnect it with self-access app credentials or re-authorize.');
         }
 
-        return Cache::remember('flipkart_access_token:'.$account->getKey(), now()->addMinutes(50), function () use ($account): string {
-            $response = Http::asForm()
-                ->withBasicAuth((string) config('services.flipkart.client_id'), (string) config('services.flipkart.client_secret'))
-                ->acceptJson()
-                ->timeout((int) config('services.flipkart.timeout', 30))
-                ->get($this->baseUrl().'/oauth-service/oauth/token', [
-                    'grant_type' => 'refresh_token',
-                    'refresh_token' => $account->refresh_token,
-                ]);
-
-            if ($response->failed() || blank($response->json('access_token'))) {
-                $this->throwForResponse($response->status(), (array) ($response->json() ?? []));
-            }
+        return Cache::remember('flipkart_access_token:'.$account->getKey(), now()->addMinutes(50), function () use ($account, $credentials, $selfAccess): string {
+            // Self-access apps (Seller Dashboard > Developer Access) use
+            // grant_type=client_credentials with the seller's own app
+            // credentials; partner apps refresh with the server-level ones.
+            $data = $selfAccess
+                ? $this->tokenRequest(
+                    (string) $credentials['app_id'],
+                    (string) $credentials['app_secret'],
+                    ['grant_type' => 'client_credentials', 'scope' => 'Seller_Api'],
+                )
+                : $this->tokenRequest(
+                    (string) config('services.flipkart.client_id'),
+                    (string) config('services.flipkart.client_secret'),
+                    ['grant_type' => 'refresh_token', 'refresh_token' => $account->refresh_token],
+                );
 
             $account->forceFill(['token_last_refreshed_at' => now()])->saveQuietly();
 
-            return (string) $response->json('access_token');
+            return (string) $data['access_token'];
         });
+    }
+
+    /**
+     * @param  array<string, mixed>  $query
+     * @return array<string, mixed>
+     */
+    private function tokenRequest(string $clientId, string $clientSecret, array $query): array
+    {
+        try {
+            $response = Http::withBasicAuth($clientId, $clientSecret)
+                ->acceptJson()
+                ->timeout((int) config('services.flipkart.timeout', 30))
+                ->connectTimeout(10)
+                ->retry(2, 400, throw: false)
+                ->get($this->baseUrl().'/oauth-service/oauth/token', $query);
+        } catch (ConnectionException $exception) {
+            throw new ChannelApiException(
+                $this->platform(),
+                "Could not reach Flipkart's authorization servers: {$exception->getMessage()}",
+            );
+        }
+
+        if ($response->failed() || blank($response->json('access_token'))) {
+            $this->throwForResponse($response->status(), (array) ($response->json() ?? []));
+        }
+
+        return (array) $response->json();
     }
 
     private function baseUrl(): string

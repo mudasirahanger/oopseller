@@ -26,9 +26,19 @@ interface ChannelProvider
      * Exchange an OAuth authorization code for tokens. API-key platforms throw
      * UnsupportedChannelOperation.
      *
+     * @param  array<string, mixed>  $options  flow context (state, redirect_uri, ...)
      * @return array<string, mixed>
      */
-    public function exchangeCode(string $code): array;
+    public function exchangeCode(string $code, array $options = []): array;
+
+    /**
+     * Validate the per-account credentials stored on the channel account
+     * (API keys / self-access app credentials) against the platform, throwing
+     * ChannelApiException when the platform rejects them. Platforms that
+     * cannot cheaply validate (partner-gated APIs) may no-op; failures then
+     * surface on the first sync instead.
+     */
+    public function verifyCredentials(ChannelAccount $account): void;
 
     /**
      * Stream the account's listings from the platform.

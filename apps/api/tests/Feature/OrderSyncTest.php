@@ -117,10 +117,12 @@ class OrderSyncTest extends TestCase
                 return null;
             }
 
-            public function exchangeCode(string $code): array
+            public function exchangeCode(string $code, array $options = []): array
             {
                 return [];
             }
+
+            public function verifyCredentials(ChannelAccount $account): void {}
 
             public function syncListings(ChannelAccount $account, array $options = []): iterable
             {

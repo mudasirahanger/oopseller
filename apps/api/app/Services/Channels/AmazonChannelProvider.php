@@ -44,9 +44,16 @@ final class AmazonChannelProvider implements ChannelProvider
         );
     }
 
-    public function exchangeCode(string $code): array
+    public function exchangeCode(string $code, array $options = []): array
     {
         return $this->amazon->exchangeAuthorizationCode($code);
+    }
+
+    public function verifyCredentials(ChannelAccount $account): void
+    {
+        // Amazon accounts connect through the dedicated OAuth/manual flows in
+        // AmazonIntegrationController, which validate the refresh token via
+        // the Sellers API themselves.
     }
 
     public function syncListings(ChannelAccount $account, array $options = []): iterable

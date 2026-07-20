@@ -70,9 +70,9 @@ enum Platform: string
                 'The initial listing sync is queued automatically after authorization.',
             ],
             self::Flipkart => [
-                'Register an application in the Flipkart Seller API portal (seller.flipkart.com → API access) to get an application ID and secret.',
-                'Set FLIPKART_CLIENT_ID, FLIPKART_CLIENT_SECRET, and FLIPKART_REDIRECT_URI in the server environment. The redirect URI must match the one whitelisted with Flipkart.',
-                'Click Connect, pick the client, and sign in with the Flipkart seller account on the consent screen.',
+                'Flipkart has two app types. Self-access (most sellers): in the Seller Dashboard go to Manage Profile → Developer Access and create an application to get an Application ID and Secret — then click Connect, pick the client, and paste them. No consent screen is involved.',
+                'Third-party (partners/aggregators only): register the app in the Flipkart Partner Dashboard, set FLIPKART_CLIENT_ID, FLIPKART_CLIENT_SECRET, and FLIPKART_REDIRECT_URI on the server, and use the Authorize option to send the seller through the consent screen.',
+                'Using self-access credentials on the consent screen fails with Flipkart\'s generic "Oops! Something went wrong" page — self-access apps must connect with app credentials instead.',
                 'Run a listing sync from the connected account card to import Flipkart listings (FSNs).',
             ],
             self::Meesho => [
@@ -101,6 +101,13 @@ enum Platform: string
     public function credentialFields(): array
     {
         return match ($this) {
+            // Flipkart self-access apps (Seller Dashboard > Developer Access)
+            // authenticate with grant_type=client_credentials using these —
+            // the OAuth consent flow is only for Partner Dashboard apps.
+            self::Flipkart => [
+                ['key' => 'app_id', 'label' => 'Application ID (appId)', 'secret' => false],
+                ['key' => 'app_secret', 'label' => 'Application secret', 'secret' => true],
+            ],
             self::Meesho => [
                 ['key' => 'supplier_id', 'label' => 'Supplier ID', 'secret' => false],
                 ['key' => 'api_key', 'label' => 'API key', 'secret' => true],

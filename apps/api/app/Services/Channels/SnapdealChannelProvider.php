@@ -32,9 +32,15 @@ final class SnapdealChannelProvider implements ChannelProvider
         return null;
     }
 
-    public function exchangeCode(string $code): array
+    public function exchangeCode(string $code, array $options = []): array
     {
         throw UnsupportedChannelOperation::for($this->platform(), 'OAuth code exchange (Snapdeal uses auth tokens)');
+    }
+
+    public function verifyCredentials(ChannelAccount $account): void
+    {
+        // Snapdeal's seller API is program-gated with no stable public
+        // validation endpoint; credential problems surface on the first sync.
     }
 
     public function syncListings(ChannelAccount $account, array $options = []): iterable

@@ -1,15 +1,43 @@
 # Flipkart connector
 
-**Auth:** OAuth 2.0 (authorization code) against the Flipkart seller API gateway.
+**Auth:** two Flipkart app types (per the official FMS API docs at
+seller.flipkart.com/api-docs):
+- **Self-access** — the seller's own app (Seller Dashboard → Manage Profile →
+  Developer Access). Uses `grant_type=client_credentials` with the seller's
+  `appId`/`app_secret`. **No consent screen.** This is what most single sellers
+  have, and what OopSeller connects via app credentials.
+- **Third-party / partner** — for aggregators managing many sellers (Partner
+  Dashboard). Uses the authorization-code OAuth flow with seller consent, and
+  requires the server-level `FLIPKART_*` credentials.
+
 **Adapter:** `app/Services/Channels/FlipkartChannelProvider.php`
 **Identity:** listings are FSN-based; products store the FSN in `products.external_id`.
 
-## Server setup
+> ⚠️ **"Oops! Something went wrong" on the Flipkart consent page** means a
+> self-access app was pushed through the partner OAuth flow. Self-access apps
+> have no consent screen — connect them with **app credentials** instead.
 
-1. Register an application in the Flipkart seller API portal (Seller Hub → API access) to obtain an application ID and secret.
-2. Whitelist the callback URL with Flipkart. Local default:
-   `http://127.0.0.1:8000/api/v1/integrations/channels/flipkart/callback`
-3. Set in `apps/api/.env`:
+## Connecting a self-access account (most sellers)
+
+No server-level configuration needed.
+
+1. In the Flipkart Seller Dashboard: Manage Profile → Developer Access → create
+   an application → copy the **Application ID** and **Application secret**.
+2. Integration hub → Flipkart card → **Connect** → **App credentials
+   (self-access)** tab → pick the client, paste both values.
+3. `POST /api/v1/integrations/channels/flipkart/connect` verifies the
+   credentials with a live `client_credentials` token request (invalid ones are
+   rejected with a 422 and no leftover row), stores them **encrypted** in
+   `channel_accounts.credentials`, and marks the account active.
+
+## Connecting a partner (third-party) account
+
+For aggregators only. Requires server-level app registration.
+
+1. Register the app in the Flipkart **Partner Dashboard** and whitelist the
+   callback URL (local default
+   `http://127.0.0.1:8000/api/v1/integrations/channels/flipkart/callback`).
+2. Set in `apps/api/.env`:
 
 ```dotenv
 FLIPKART_CLIENT_ID=
@@ -18,13 +46,12 @@ FLIPKART_REDIRECT_URI=http://127.0.0.1:8000/api/v1/integrations/channels/flipkar
 # FLIPKART_BASE_URL defaults to https://api.flipkart.net
 ```
 
-Until these are set the Integration Hub shows Flipkart as **Needs configuration** and the Connect button stays disabled.
-
-## Connecting an account
-
-1. Integration hub → Flipkart card → **Connect**, pick the client.
-2. `POST /api/v1/integrations/channels/flipkart/authorize` returns the consent URL; the browser is redirected to Flipkart's OAuth screen (`/oauth-service/oauth/authorize`, scope `Seller_Api`).
-3. The callback exchanges the code for tokens; the refresh token is stored encrypted on the `channel_accounts` row and an initial listing sync is queued.
+3. Integration hub → Flipkart → **Connect** → **Authorize (partner app)** tab →
+   pick the client. `POST /integrations/channels/flipkart/authorize` returns the
+   consent URL (`/oauth-service/oauth/authorize`, `response_type=code`,
+   `scope=Seller_Api`, `state`); after seller consent the callback exchanges the
+   code (passing the original `state`, per the docs) for tokens, stores the
+   refresh token encrypted, and queues an initial listing sync.
 
 ## Sync behavior
 
@@ -34,7 +61,8 @@ Until these are set the Integration Hub shows Flipkart as **Needs configuration*
 
 ## Caveats
 
-- Flipkart seller API access requires approval on their side; endpoints may differ per program tier. The adapter isolates every Flipkart HTTP call, so path adjustments touch only this one class.
+- Both self-access and partner tokens run through the same `tokenRequest()` in the adapter (only the grant type differs), and the same Listings/Orders v3 endpoints. Connection failures to Flipkart's auth servers surface as a clean `ChannelApiException`, not an uncaught 500.
+- Flipkart seller API access still requires the seller to have enabled Developer Access; endpoints may differ per program tier. The adapter isolates every Flipkart HTTP call, so path adjustments touch only this one class.
 
 ## Order sync (added in the orders phase)
 

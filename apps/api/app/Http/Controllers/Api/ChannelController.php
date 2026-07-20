@@ -10,6 +10,7 @@ use App\Models\ChannelAccount;
 use App\Models\ChannelSyncRun;
 use App\Models\Client;
 use App\Services\Channels\ChannelManager;
+use App\Services\Channels\Exceptions\ChannelApiException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -57,15 +58,16 @@ class ChannelController extends Controller
     }
 
     /**
-     * Connect an API-key platform (Meesho, Snapdeal, ...) by storing the
-     * per-account credentials encrypted on the channel account.
+     * Connect a platform with per-account credentials stored encrypted on the
+     * channel account: API-key platforms (Meesho, Snapdeal, ...) and OAuth
+     * platforms that also support self-access app credentials (Flipkart).
      */
     public function connect(Request $request, string $platform, ChannelManager $channels): JsonResponse
     {
         $enum = $this->resolvePlatform($platform, $channels);
-        abort_unless($enum->authType() === 'api_key', 422, "{$enum->label()} uses OAuth — start the authorization flow instead.");
-
         $fields = collect($enum->credentialFields());
+        abort_if($fields->isEmpty(), 422, "{$enum->label()} uses OAuth — start the authorization flow instead.");
+
         $data = $request->validate([
             'client_id' => ['required', 'integer', 'exists:clients,id'],
             'name' => ['nullable', 'string', 'max:120'],
@@ -78,6 +80,12 @@ class ChannelController extends Controller
         $organizationId = (int) $request->attributes->get('organization_id');
         $client = Client::where('organization_id', $organizationId)->findOrFail($data['client_id']);
         $identifier = (string) ($data['credentials'][$fields->first()['key']] ?? Str::random(10));
+
+        $existingAccount = ChannelAccount::query()
+            ->where('organization_id', $organizationId)
+            ->where('platform', $enum->value)
+            ->where('account_identifier', $identifier)
+            ->first();
 
         $account = ChannelAccount::updateOrCreate(
             [
@@ -95,6 +103,21 @@ class ChannelController extends Controller
                 'last_sync_error' => null,
             ],
         );
+
+        try {
+            $channels->provider($enum)->verifyCredentials($account);
+        } catch (ChannelApiException $exception) {
+            if ($existingAccount === null) {
+                $account->delete();
+            } else {
+                $account->update(['status' => 'error', 'last_sync_error' => $exception->getMessage()]);
+            }
+            report($exception);
+
+            return response()->json([
+                'message' => "{$enum->label()} rejected these credentials: ".Str::limit($exception->getMessage(), 200),
+            ], 422);
+        }
 
         return response()->json(['data' => $account->load('client:id,name')], 201);
     }
@@ -145,7 +168,7 @@ class ChannelController extends Controller
         abort_unless($state, 419, 'Authorization state expired or is invalid.');
 
         try {
-            $token = $channels->provider($enum)->exchangeCode($data['code']);
+            $token = $channels->provider($enum)->exchangeCode($data['code'], ['state' => $data['state']]);
             $identifier = (string) ($token['seller_id'] ?? $token['merchant_id'] ?? 'seller-'.Str::lower(Str::random(8)));
 
             $account = ChannelAccount::updateOrCreate(

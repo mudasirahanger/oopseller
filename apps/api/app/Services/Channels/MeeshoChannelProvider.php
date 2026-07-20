@@ -32,9 +32,15 @@ final class MeeshoChannelProvider implements ChannelProvider
         return null;
     }
 
-    public function exchangeCode(string $code): array
+    public function exchangeCode(string $code, array $options = []): array
     {
         throw UnsupportedChannelOperation::for($this->platform(), 'OAuth code exchange (Meesho uses API keys)');
+    }
+
+    public function verifyCredentials(ChannelAccount $account): void
+    {
+        // Meesho's supplier API is partner-gated with no stable public
+        // validation endpoint; credential problems surface on the first sync.
     }
 
     public function syncListings(ChannelAccount $account, array $options = []): iterable

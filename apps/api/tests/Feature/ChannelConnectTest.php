@@ -12,6 +12,8 @@ use App\Models\User;
 use App\Services\Channels\ChannelCatalogSyncService;
 use App\Services\Channels\ChannelManager;
 use App\Services\Channels\Contracts\ChannelProvider;
+use App\Services\Channels\Exceptions\ChannelApiException;
+use App\Services\Channels\FlipkartChannelProvider;
 use App\Services\Channels\MeeshoChannelProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -33,9 +35,12 @@ class ChannelConnectTest extends TestCase
         $this->assertSame('api_key', $meesho['auth_type']);
         $this->assertSame('supplier_id', $meesho['credential_fields'][0]['key']);
 
+        // Flipkart is always "available": self-access app credentials need no
+        // server-level configuration (only the OAuth partner flow does).
         $flipkart = $catalog->firstWhere('platform', 'flipkart');
-        $this->assertSame('needs_configuration', $flipkart['status']);
+        $this->assertSame('available', $flipkart['status']);
         $this->assertNotEmpty($flipkart['setup_steps']);
+        $this->assertSame('app_id', $flipkart['credential_fields'][0]['key']);
 
         $snapdeal = $catalog->firstWhere('platform', 'snapdeal');
         $this->assertSame('available', $snapdeal['status']);
@@ -75,15 +80,103 @@ class ChannelConnectTest extends TestCase
         ])->assertUnprocessable();
     }
 
-    public function test_oauth_platform_rejects_api_key_connect(): void
+    public function test_oauth_platform_without_credential_fields_rejects_api_key_connect(): void
     {
+        [, $organization, $headers] = $this->agencyUser();
+        $client = $this->makeClient($organization);
+
+        // Amazon is OAuth-only via its dedicated endpoints and defines no
+        // credential fields, so the generic connect endpoint rejects it.
+        $this->withHeaders($headers)->postJson('/api/v1/integrations/channels/amazon/connect', [
+            'client_id' => $client->id,
+            'credentials' => ['api_key' => 'x'],
+        ])->assertUnprocessable();
+    }
+
+    public function test_flipkart_self_access_connect_verifies_and_stores_credentials(): void
+    {
+        $this->bindFlipkartStub(rejectCredentials: false);
+        [, $organization, $headers] = $this->agencyUser();
+        $client = $this->makeClient($organization);
+
+        $response = $this->withHeaders($headers)->postJson('/api/v1/integrations/channels/flipkart/connect', [
+            'client_id' => $client->id,
+            'credentials' => ['app_id' => 'fk-app-123', 'app_secret' => 'fk-secret'],
+        ])->assertCreated();
+
+        $this->assertSame('flipkart', $response->json('data.platform'));
+        $account = ChannelAccount::firstOrFail();
+        $this->assertSame('fk-app-123', $account->account_identifier);
+        $this->assertSame('fk-secret', $account->credentials['app_secret']);
+    }
+
+    public function test_flipkart_self_access_connect_rejects_bad_credentials_and_leaves_no_account(): void
+    {
+        $this->bindFlipkartStub(rejectCredentials: true);
         [, $organization, $headers] = $this->agencyUser();
         $client = $this->makeClient($organization);
 
         $this->withHeaders($headers)->postJson('/api/v1/integrations/channels/flipkart/connect', [
             'client_id' => $client->id,
-            'credentials' => ['api_key' => 'x'],
+            'credentials' => ['app_id' => 'fk-bad', 'app_secret' => 'fk-bad-secret'],
         ])->assertUnprocessable();
+
+        $this->assertSame(0, ChannelAccount::count());
+    }
+
+    private function bindFlipkartStub(bool $rejectCredentials): void
+    {
+        $this->app->bind(FlipkartChannelProvider::class, fn () => new class($rejectCredentials) implements ChannelProvider
+        {
+            public function __construct(private readonly bool $rejectCredentials) {}
+
+            public function platform(): Platform
+            {
+                return Platform::Flipkart;
+            }
+
+            public function isConfigured(): bool
+            {
+                return true;
+            }
+
+            public function authorizationUrl(string $state, array $options = []): ?string
+            {
+                return null;
+            }
+
+            public function exchangeCode(string $code, array $options = []): array
+            {
+                return [];
+            }
+
+            public function verifyCredentials(ChannelAccount $account): void
+            {
+                if ($this->rejectCredentials) {
+                    throw new ChannelApiException(Platform::Flipkart, 'Invalid client credentials.', 401);
+                }
+            }
+
+            public function syncListings(ChannelAccount $account, array $options = []): iterable
+            {
+                return [];
+            }
+
+            public function getOrders(ChannelAccount $account, \DateTimeInterface $from, \DateTimeInterface $to, array $options = []): iterable
+            {
+                return [];
+            }
+
+            public function updateListing(ChannelAccount $account, Listing $listing, array $patches, array $options = []): array
+            {
+                return [];
+            }
+
+            public function getInventory(ChannelAccount $account, array $options = []): iterable
+            {
+                return [];
+            }
+        });
     }
 
     public function test_unknown_platform_is_rejected(): void
@@ -129,10 +222,12 @@ class ChannelConnectTest extends TestCase
                 return null;
             }
 
-            public function exchangeCode(string $code): array
+            public function exchangeCode(string $code, array $options = []): array
             {
                 return [];
             }
+
+            public function verifyCredentials(ChannelAccount $account): void {}
 
             public function syncListings(ChannelAccount $account, array $options = []): iterable
             {
