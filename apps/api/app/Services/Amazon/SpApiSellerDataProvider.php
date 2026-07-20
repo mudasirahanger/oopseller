@@ -47,21 +47,29 @@ final class SpApiSellerDataProvider implements SellerDataProvider
     {
         $pageToken = null;
         $region = Marketplace::where('amazon_marketplace_id', $marketplaceId)->value('region') ?? $account->region;
+        $isSandbox = (bool) ($account->metadata['sandbox'] ?? config('services.amazon.sandbox'));
 
         do {
-            $response = $this->client->get(
-                $account,
-                '/listings/2021-08-01/items/'.rawurlencode((string) $account->account_identifier),
-                [
-                    'marketplaceIds' => $marketplaceId,
-                    'includedData' => ['summaries', 'attributes', 'issues', 'offers', 'fulfillmentAvailability', 'relationships', 'productTypes'],
-                    'pageSize' => 20,
-                    'pageToken' => $pageToken,
-                    'sortBy' => 'lastUpdatedDate',
-                    'sortOrder' => 'DESC',
-                ],
-                $region
-            );
+            try {
+                $response = $this->client->get(
+                    $account,
+                    '/listings/2021-08-01/items/'.rawurlencode((string) $account->account_identifier),
+                    [
+                        'marketplaceIds' => $marketplaceId,
+                        'includedData' => ['summaries', 'attributes', 'issues', 'offers', 'fulfillmentAvailability', 'relationships', 'productTypes'],
+                        'pageSize' => 20,
+                        'pageToken' => $pageToken,
+                        'sortBy' => 'lastUpdatedDate',
+                        'sortOrder' => 'DESC',
+                    ],
+                    $region
+                );
+            } catch (AmazonSpApiException $exception) {
+                if ($isSandbox && str_contains($exception->getMessage(), 'Could not match input arguments')) {
+                    break;
+                }
+                throw $exception;
+            }
 
             foreach ($response['items'] ?? [] as $item) {
                 yield $item;
@@ -75,6 +83,7 @@ final class SpApiSellerDataProvider implements SellerDataProvider
     {
         $nextToken = null;
         $region = Marketplace::where('amazon_marketplace_id', reset($marketplaceIds))->value('region') ?? $account->region;
+        $isSandbox = (bool) ($account->metadata['sandbox'] ?? config('services.amazon.sandbox'));
 
         do {
             $query = $nextToken
@@ -86,7 +95,14 @@ final class SpApiSellerDataProvider implements SellerDataProvider
                     'MaxResultsPerPage' => 100,
                 ]);
 
-            $payload = $this->client->get($account, '/orders/v0/orders', $query, $region)['payload'] ?? [];
+            try {
+                $payload = $this->client->get($account, '/orders/v0/orders', $query, $region)['payload'] ?? [];
+            } catch (AmazonSpApiException $exception) {
+                if ($isSandbox && str_contains($exception->getMessage(), 'Could not match input arguments')) {
+                    break;
+                }
+                throw $exception;
+            }
 
             foreach ($payload['Orders'] ?? [] as $order) {
                 $order['OrderItems'] = $this->orderItems($account, (string) $order['AmazonOrderId'], $region);
