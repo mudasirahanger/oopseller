@@ -140,6 +140,78 @@ class AmazonIntegrationController extends Controller
         }
     }
 
+    /**
+     * Connect an Amazon seller account by pasting a refresh token obtained
+     * through Amazon's direct self-authorization (Seller Central > Manage
+     * Your Apps > Authorize), used for Private SP-API applications, which
+     * have no OAuth Login/Redirect URI and cannot use the redirect-based
+     * authorizeSeller()/callback() flow above (that flow requires a Public
+     * application; using it on a Private application is what produces
+     * Amazon error MD9100).
+     */
+    public function connectManually(Request $request, SellerDataProvider $provider): JsonResponse
+    {
+        $this->requireOrganizationRole($request, 'owner', 'admin');
+        $data = $request->validate([
+            'client_id' => ['required', 'integer', 'exists:clients,id'],
+            'marketplace_id' => ['required', 'string', 'exists:marketplaces,amazon_marketplace_id'],
+            'seller_id' => ['required', 'string', 'max:100'],
+            'refresh_token' => ['required', 'string', 'min:20'],
+        ]);
+        $organizationId = (int) $request->attributes->get('organization_id');
+        $client = Client::where('organization_id', $organizationId)->findOrFail($data['client_id']);
+        $marketplace = Marketplace::where('amazon_marketplace_id', $data['marketplace_id'])->firstOrFail();
+
+        $existingAccount = AmazonAccount::query()
+            ->where('organization_id', $organizationId)
+            ->where('account_identifier', $data['seller_id'])
+            ->first();
+        abort_if(
+            $existingAccount && $existingAccount->client_id !== $client->id,
+            409,
+            'This Amazon seller account is already connected to another client in the agency.',
+        );
+
+        $account = AmazonAccount::updateOrCreate(
+            [
+                'organization_id' => $organizationId,
+                'account_identifier' => $data['seller_id'],
+            ],
+            [
+                'client_id' => $client->id,
+                'name' => 'Amazon Seller '.$data['seller_id'],
+                'region' => $marketplace->region,
+                'refresh_token' => $data['refresh_token'],
+                'status' => 'active',
+                'authorized_at' => now(),
+                'last_sync_error' => null,
+                'metadata' => ['initial_marketplace_id' => $marketplace->amazon_marketplace_id, 'connected_via' => 'manual_refresh_token'],
+            ],
+        );
+        Cache::forget('amazon_lwa_access_token:'.$account->id);
+
+        try {
+            $provider->marketplaceParticipations($account);
+        } catch (AmazonSpApiException $exception) {
+            $wasNew = $existingAccount === null;
+            if ($wasNew) {
+                $account->delete();
+            } else {
+                $account->update(['status' => 'error', 'last_sync_error' => $exception->getMessage()]);
+            }
+            report($exception);
+
+            return response()->json([
+                'message' => 'Amazon rejected this refresh token: '.Str::limit($exception->getMessage(), 200),
+            ], 422);
+        }
+
+        $this->syncMarketplaceParticipations($account, $provider, $marketplace->amazon_marketplace_id);
+        $this->queueSync($account, $marketplace->amazon_marketplace_id);
+
+        return response()->json(['data' => $account->fresh()->load('client:id,name', 'marketplaces')], 201);
+    }
+
     public function sync(Request $request, AmazonAccount $amazonAccount): JsonResponse
     {
         $this->assertAccountAccess($request, $amazonAccount);

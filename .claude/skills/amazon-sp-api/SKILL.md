@@ -49,6 +49,30 @@ swappable in tests (see `tests/Feature/*` binding stub providers).
 | Returns / Refunds | `get_returns`, `get_refund_info` | ❌ planned (order status tracks `returned` only) |
 | Reports | `request_report`, `get_report`, `get_report_document` | ❌ planned (data-ingestion phase) |
 
+## Authorization: Public vs Private apps (MD9100)
+
+Amazon SP-API apps are either **Public** (Solution Provider, third-party OAuth)
+or **Private** (self-authorized, single seller). This determines which flow
+works — mixing them up is the #1 cause of confusion:
+
+- **Public app** → `AmazonIntegrationController::authorizeSeller/callback`
+  (redirect to `/apps/authorize/consent`, `SpApiSellerDataProvider::authorizationUrl`).
+  Requires **OAuth Login URI** + **OAuth Redirect URI** saved on the app in the
+  Amazon Developer Console. Using this flow on a Private app (which has no such
+  fields) produces **error MD9100** ("not set up for third-party authorisation").
+- **Private app** → no redirect flow exists. The seller self-authorizes in
+  Seller Central (Apps & Services → Manage Your Apps → Authorize) and Amazon
+  displays a refresh token directly on screen. OopSeller's
+  `AmazonIntegrationController::connectManually` (`POST
+  /integrations/amazon/accounts/manual`) accepts that pasted refresh token,
+  validates it immediately via `marketplaceParticipations()` (rejects with 422
+  and no leftover row if invalid — don't silently swallow the exception the way
+  `syncMarketplaceParticipations()` does for the OAuth path), then stores it
+  encrypted exactly like the OAuth path does.
+
+Both paths converge on the same `AmazonAccount` row and the same sync
+machinery — only how `refresh_token` gets populated differs.
+
 ## Conventions to follow when extending
 
 - **New operation:** add to the `SellerDataProvider` interface, implement in

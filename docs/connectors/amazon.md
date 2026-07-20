@@ -23,8 +23,35 @@ AMAZON_SPAPI_SANDBOX=false
 
 ## Connecting an account
 
-1. Integration hub → Amazon card → **Connect**, pick the client and Seller Central marketplace (this selects the regional consent URL).
-2. Approve the consent screen with the seller account; the callback stores the refresh token encrypted and queues the initial listing sync.
+Amazon SP-API applications are either **Public** (published/Solution Provider,
+supports the OAuth redirect flow) or **Private** (self-authorized, single
+seller). OopSeller supports both — pick the mode in the Connect modal.
+
+**Public app (OAuth):**
+
+1. Integration hub → Amazon card → **Connect** → OAuth (Public app), pick the
+   client and Seller Central marketplace (this selects the regional consent URL).
+2. Approve the consent screen with the seller account; the callback stores the
+   refresh token encrypted and queues the initial listing sync.
+
+This requires the app's **OAuth Login URI** and **OAuth Redirect URI** to be
+set and saved in the Amazon Developer Console — a Public/Solution-Provider-only
+setting. Using the redirect flow on a Private app produces Amazon error
+**MD9100** ("The application provided is not set up for third-party
+authorisation using OAuth"), because Private apps have no such fields at all.
+
+**Private app (manual refresh token):**
+
+1. In Seller Central, go to **Apps & Services → Manage Your Apps**, open the
+   app, and click **Authorize**. Amazon self-authorizes the app for that seller
+   account directly and displays a refresh token on screen
+   (`Atzr|...`) alongside the Selling Partner (seller) ID.
+2. Integration hub → Amazon card → **Connect** → Refresh token (Private app),
+   pick the client and marketplace, and paste the seller ID and refresh token.
+3. `POST /api/v1/integrations/amazon/accounts/manual` validates the token by
+   calling the Sellers API immediately — an invalid token is rejected with a
+   422 and no row is left behind — then stores it encrypted (same as the OAuth
+   path) and queues the initial listing sync. Owner/admin role required.
 
 ## Implemented operations
 

@@ -74,6 +74,8 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/integrations/amazon/accounts', [AmazonIntegrationController::class, 'index']);
         Route::post('/integrations/amazon/authorize', [AmazonIntegrationController::class, 'authorizeSeller'])
             ->middleware('throttle:amazon-oauth');
+        Route::post('/integrations/amazon/accounts/manual', [AmazonIntegrationController::class, 'connectManually'])
+            ->middleware('throttle:amazon-oauth');
         Route::post('/integrations/amazon/accounts/{amazonAccount}/sync', [AmazonIntegrationController::class, 'sync']);
         Route::delete('/integrations/amazon/accounts/{amazonAccount}', [AmazonIntegrationController::class, 'disconnect']);
     });
