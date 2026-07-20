@@ -46,6 +46,7 @@ final class SpApiSellerDataProvider implements SellerDataProvider
     public function importListings(ChannelAccount $account, string $marketplaceId): iterable
     {
         $pageToken = null;
+        $region = Marketplace::where('amazon_marketplace_id', $marketplaceId)->value('region') ?? $account->region;
 
         do {
             $response = $this->client->get(
@@ -59,6 +60,7 @@ final class SpApiSellerDataProvider implements SellerDataProvider
                     'sortBy' => 'lastUpdatedDate',
                     'sortOrder' => 'DESC',
                 ],
+                $region
             );
 
             foreach ($response['items'] ?? [] as $item) {
@@ -72,6 +74,7 @@ final class SpApiSellerDataProvider implements SellerDataProvider
     public function importOrders(ChannelAccount $account, array $marketplaceIds, \DateTimeInterface $updatedAfter, ?\DateTimeInterface $updatedBefore = null): iterable
     {
         $nextToken = null;
+        $region = Marketplace::where('amazon_marketplace_id', reset($marketplaceIds))->value('region') ?? $account->region;
 
         do {
             $query = $nextToken
@@ -83,10 +86,10 @@ final class SpApiSellerDataProvider implements SellerDataProvider
                     'MaxResultsPerPage' => 100,
                 ]);
 
-            $payload = $this->client->get($account, '/orders/v0/orders', $query)['payload'] ?? [];
+            $payload = $this->client->get($account, '/orders/v0/orders', $query, $region)['payload'] ?? [];
 
             foreach ($payload['Orders'] ?? [] as $order) {
-                $order['OrderItems'] = $this->orderItems($account, (string) $order['AmazonOrderId']);
+                $order['OrderItems'] = $this->orderItems($account, (string) $order['AmazonOrderId'], $region);
 
                 yield $order;
             }
@@ -96,7 +99,7 @@ final class SpApiSellerDataProvider implements SellerDataProvider
     }
 
     /** @return array<int, array<string, mixed>> */
-    private function orderItems(ChannelAccount $account, string $amazonOrderId): array
+    private function orderItems(ChannelAccount $account, string $amazonOrderId, ?string $region = null): array
     {
         $items = [];
         $nextToken = null;
@@ -106,6 +109,7 @@ final class SpApiSellerDataProvider implements SellerDataProvider
                 $account,
                 '/orders/v0/orders/'.rawurlencode($amazonOrderId).'/orderItems',
                 array_filter(['NextToken' => $nextToken]),
+                $region
             )['payload'] ?? [];
 
             $items = [...$items, ...($payload['OrderItems'] ?? [])];
@@ -117,6 +121,8 @@ final class SpApiSellerDataProvider implements SellerDataProvider
 
     public function getCatalogItem(ChannelAccount $account, string $marketplaceId, string $asin): array
     {
+        $region = Marketplace::where('amazon_marketplace_id', $marketplaceId)->value('region') ?? $account->region;
+
         return $this->client->get(
             $account,
             '/catalog/2022-04-01/items/'.rawurlencode($asin),
@@ -125,11 +131,14 @@ final class SpApiSellerDataProvider implements SellerDataProvider
                 'includedData' => ['attributes', 'classifications', 'dimensions', 'identifiers', 'images', 'productTypes', 'relationships', 'salesRanks', 'summaries'],
                 'locale' => $this->localeForMarketplace($marketplaceId),
             ],
+            $region
         );
     }
 
     public function getListingItem(ChannelAccount $account, string $marketplaceId, string $sku): array
     {
+        $region = Marketplace::where('amazon_marketplace_id', $marketplaceId)->value('region') ?? $account->region;
+
         return $this->client->get(
             $account,
             '/listings/2021-08-01/items/'.rawurlencode((string) $account->account_identifier).'/'.rawurlencode($sku),
@@ -138,11 +147,14 @@ final class SpApiSellerDataProvider implements SellerDataProvider
                 'includedData' => ['summaries', 'attributes', 'issues', 'offers', 'fulfillmentAvailability', 'relationships', 'productTypes'],
                 'issueLocale' => $this->localeForMarketplace($marketplaceId),
             ],
+            $region
         );
     }
 
     public function getProductTypeDefinition(ChannelAccount $account, string $marketplaceId, string $productType): array
     {
+        $region = Marketplace::where('amazon_marketplace_id', $marketplaceId)->value('region') ?? $account->region;
+
         return $this->client->get(
             $account,
             '/definitions/2020-09-01/productTypes/'.rawurlencode($productType),
@@ -154,6 +166,7 @@ final class SpApiSellerDataProvider implements SellerDataProvider
                 'requirementsEnforced' => 'NOT_ENFORCED',
                 'locale' => $this->localeForMarketplace($marketplaceId),
             ],
+            $region
         );
     }
 
@@ -169,6 +182,8 @@ final class SpApiSellerDataProvider implements SellerDataProvider
 
     private function listingPatch(ChannelAccount $account, string $marketplaceId, string $sku, string $productType, array $patches, bool $preview): array
     {
+        $region = Marketplace::where('amazon_marketplace_id', $marketplaceId)->value('region') ?? $account->region;
+
         return $this->client->patch(
             $account,
             '/listings/2021-08-01/items/'.rawurlencode((string) $account->account_identifier).'/'.rawurlencode($sku),
@@ -182,6 +197,7 @@ final class SpApiSellerDataProvider implements SellerDataProvider
                 'productType' => $productType,
                 'patches' => $patches,
             ],
+            $region
         );
     }
 

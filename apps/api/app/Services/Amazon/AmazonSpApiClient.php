@@ -19,31 +19,32 @@ final class AmazonSpApiClient
         private readonly AmazonLwaClient $lwa,
     ) {}
 
-    public function get(ChannelAccount $account, string $path, array $query = []): array
+    public function get(ChannelAccount $account, string $path, array $query = [], ?string $region = null): array
     {
-        return $this->send($account, 'GET', $path, $query);
+        return $this->send($account, 'GET', $path, $query, [], $region);
     }
 
-    public function post(ChannelAccount $account, string $path, array $query = [], array $json = []): array
+    public function post(ChannelAccount $account, string $path, array $query = [], array $json = [], ?string $region = null): array
     {
-        return $this->send($account, 'POST', $path, $query, $json);
+        return $this->send($account, 'POST', $path, $query, $json, $region);
     }
 
-    public function put(ChannelAccount $account, string $path, array $query = [], array $json = []): array
+    public function put(ChannelAccount $account, string $path, array $query = [], array $json = [], ?string $region = null): array
     {
-        return $this->send($account, 'PUT', $path, $query, $json);
+        return $this->send($account, 'PUT', $path, $query, $json, $region);
     }
 
-    public function patch(ChannelAccount $account, string $path, array $query = [], array $json = []): array
+    public function patch(ChannelAccount $account, string $path, array $query = [], array $json = [], ?string $region = null): array
     {
-        return $this->send($account, 'PATCH', $path, $query, $json);
+        return $this->send($account, 'PATCH', $path, $query, $json, $region);
     }
 
-    private function send(ChannelAccount $account, string $method, string $path, array $query = [], array $json = []): array
+    private function send(ChannelAccount $account, string $method, string $path, array $query = [], array $json = [], ?string $region = null): array
     {
         $this->configuration->assertConfigured();
         $sandbox = (bool) ($account->metadata['sandbox'] ?? config('services.amazon.sandbox'));
-        $url = rtrim($this->configuration->endpoint($account->region, $sandbox), '/').'/'.ltrim($path, '/');
+        $targetRegion = $region ?? $account->region;
+        $url = rtrim($this->configuration->endpoint($targetRegion, $sandbox), '/').'/'.ltrim($path, '/');
 
         $request = $this->request($account);
         $options = ['query' => $this->normalizeQuery($query)];
