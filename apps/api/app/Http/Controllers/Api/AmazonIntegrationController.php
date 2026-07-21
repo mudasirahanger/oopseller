@@ -8,6 +8,7 @@ use App\Models\AmazonAccount;
 use App\Models\ChannelSyncRun;
 use App\Models\Client;
 use App\Models\Marketplace;
+use App\Services\Amazon\AmazonConfiguration;
 use App\Services\Amazon\Contracts\SellerDataProvider;
 use App\Services\Amazon\Exceptions\AmazonSpApiException;
 use Illuminate\Http\JsonResponse;
@@ -19,6 +20,8 @@ use Throwable;
 
 class AmazonIntegrationController extends Controller
 {
+    public function __construct(private readonly AmazonConfiguration $configuration) {}
+
     public function index(Request $request): JsonResponse
     {
         $organizationId = (int) $request->attributes->get('organization_id');
@@ -265,21 +268,25 @@ class AmazonIntegrationController extends Controller
                     continue;
                 }
 
+                $countryCode = $marketplaceData['countryCode'] ?? 'XX';
                 $marketplace = Marketplace::updateOrCreate(
                     ['amazon_marketplace_id' => $marketplaceId],
                     [
-                        'country_code' => $marketplaceData['countryCode'] ?? 'XX',
+                        'country_code' => $countryCode,
                         'name' => $marketplaceData['name'] ?? $marketplaceId,
                         'currency' => $marketplaceData['defaultCurrencyCode'] ?? 'USD',
                         'domain' => $marketplaceData['domainName'] ?? 'amazon.com',
-                        'region' => $account->region,
+                        // Each marketplace has its own SP-API region — a
+                        // seller can participate in several at once, so this
+                        // must not default to the connecting account's region.
+                        'region' => $this->configuration->regionForCountryCode($countryCode, $account->region),
                     ],
                 );
                 $ids[$marketplace->id] = ['enabled' => (bool) data_get($participation, 'participation.isParticipating', true)];
             }
 
             $fallback = Marketplace::where('amazon_marketplace_id', $fallbackMarketplaceId)->first();
-            if ($fallback && !isset($ids[$fallback->id])) {
+            if ($fallback && ! isset($ids[$fallback->id])) {
                 $ids[$fallback->id] = ['enabled' => true];
             }
 

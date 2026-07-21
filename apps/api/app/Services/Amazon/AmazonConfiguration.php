@@ -13,6 +13,20 @@ final class AmazonConfiguration
         'fe' => 'https://sellingpartnerapi-fe.amazon.com',
     ];
 
+    // Amazon SP-API region per marketplace country. Stable/documented
+    // (https://developer-docs.amazon.com/sp-api/docs/marketplace-ids) —
+    // NOT the same thing as the region of the seller account that happens
+    // to be connecting; a seller can participate in marketplaces across
+    // multiple of these at once.
+    private const COUNTRY_REGIONS = [
+        'CA' => 'na', 'US' => 'na', 'MX' => 'na', 'BR' => 'na',
+        'IE' => 'eu', 'ES' => 'eu', 'GB' => 'eu', 'FR' => 'eu', 'BE' => 'eu',
+        'NL' => 'eu', 'DE' => 'eu', 'IT' => 'eu', 'SE' => 'eu', 'ZA' => 'eu',
+        'PL' => 'eu', 'EG' => 'eu', 'TR' => 'eu', 'SA' => 'eu', 'AE' => 'eu',
+        'IN' => 'eu',
+        'SG' => 'fe', 'AU' => 'fe', 'JP' => 'fe',
+    ];
+
     private const SELLER_CENTRAL_URLS = [
         'CA' => 'https://sellercentral.amazon.ca',
         'US' => 'https://sellercentral.amazon.com',
@@ -67,6 +81,17 @@ final class AmazonConfiguration
         }
 
         return $endpoint;
+    }
+
+    /**
+     * The correct SP-API region for a marketplace's own country — falls back
+     * to $accountRegion only when the country code is unrecognized, rather
+     * than assuming every marketplace a seller participates in shares the
+     * region of whichever marketplace they originally connected through.
+     */
+    public function regionForCountryCode(string $countryCode, string $accountRegion): string
+    {
+        return self::COUNTRY_REGIONS[strtoupper($countryCode)] ?? $accountRegion;
     }
 
     public function sellerCentralUrl(Marketplace $marketplace): string
