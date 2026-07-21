@@ -70,6 +70,27 @@ class AmazonManualConnectTest extends TestCase
         $this->assertFalse($liveAccount->metadata['sandbox']);
     }
 
+    public function test_an_application_id_pasted_into_seller_id_is_rejected_with_a_clear_message(): void
+    {
+        $this->bindStubProvider(shouldFail: false);
+        [, $organization, $headers] = $this->agencyUser('owner');
+        $client = $this->makeClient($organization);
+        $this->seedMarketplace();
+
+        $response = $this->withHeaders($headers)->postJson('/api/v1/integrations/amazon/accounts/manual', [
+            'client_id' => $client->id,
+            'marketplace_id' => 'A21TJRUUN4KGV',
+            // The Application ID, not a Selling Partner ID — the exact
+            // mistake this validation exists to catch before it silently
+            // breaks every listings/orders call later.
+            'seller_id' => 'amzn1.sp.solution.ae02094a-9830-48a9-8852-e463fb08c083',
+            'refresh_token' => 'Atzr|IwEBIWrongIdRefreshTokenValueLongEnough',
+        ])->assertUnprocessable();
+
+        $response->assertJsonValidationErrors('seller_id');
+        $this->assertSame(0, AmazonAccount::count());
+    }
+
     public function test_invalid_refresh_token_is_rejected_and_no_account_is_left_behind(): void
     {
         $this->bindStubProvider(shouldFail: true);

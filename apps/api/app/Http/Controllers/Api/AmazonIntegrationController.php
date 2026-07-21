@@ -161,7 +161,21 @@ class AmazonIntegrationController extends Controller
         $data = $request->validate([
             'client_id' => ['required', 'integer', 'exists:clients,id'],
             'marketplace_id' => ['required', 'string', 'exists:marketplaces,amazon_marketplace_id'],
-            'seller_id' => ['required', 'string', 'max:100'],
+            // A real Amazon Selling Partner ID is a short code (e.g.
+            // "A1B2C3D4E5F6G7"). It is easy to mistake the Application ID
+            // (e.g. "amzn1.sp.solution....") shown on the same Developer
+            // Console page for it — that mistake passes connect (which never
+            // sends this value to Amazon) but then fails every listings/orders
+            // call with a cryptic "Could not match input arguments", since
+            // that URL embeds this value as the seller ID.
+            'seller_id' => [
+                'required', 'string', 'max:100',
+                function (string $attribute, mixed $value, \Closure $fail): void {
+                    if (str_starts_with(strtolower((string) $value), 'amzn1.')) {
+                        $fail('This looks like an Application ID, not a Selling Partner (seller) ID. Find the correct seller ID on the same Seller Central "Authorize" screen where the refresh token was shown.');
+                    }
+                },
+            ],
             'refresh_token' => ['required', 'string', 'min:20'],
             'sandbox' => ['sometimes', 'boolean'],
         ]);
