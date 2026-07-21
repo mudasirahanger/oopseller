@@ -5,6 +5,8 @@ namespace App\Services\Amazon;
 use App\Models\ChannelAccount;
 use App\Models\Marketplace;
 use App\Services\Amazon\Contracts\SellerDataProvider;
+use App\Services\Amazon\Exceptions\AmazonSpApiException;
+use Illuminate\Validation\ValidationException;
 
 final class SpApiSellerDataProvider implements SellerDataProvider
 {
@@ -105,7 +107,7 @@ final class SpApiSellerDataProvider implements SellerDataProvider
             }
 
             foreach ($payload['Orders'] ?? [] as $order) {
-                $order['OrderItems'] = $this->orderItems($account, (string) $order['AmazonOrderId'], $region);
+                $order['OrderItems'] = $this->orderItems($account, (string) $order['AmazonOrderId'], $region, $isSandbox);
 
                 yield $order;
             }
@@ -115,7 +117,24 @@ final class SpApiSellerDataProvider implements SellerDataProvider
     }
 
     /** @return array<int, array<string, mixed>> */
-    private function orderItems(ChannelAccount $account, string $amazonOrderId, ?string $region = null): array
+    private function orderItems(ChannelAccount $account, string $amazonOrderId, ?string $region = null, bool $isSandbox = false): array
+    {
+        // Sandbox's GetOrders returns canned mock orders, but GetOrderItems
+        // only recognizes a small separate set of hardcoded test order IDs —
+        // calling it with the order ID GetOrders just handed back routinely
+        // fails here even though the parent order fetch succeeded.
+        try {
+            return $this->fetchOrderItems($account, $amazonOrderId, $region);
+        } catch (AmazonSpApiException $exception) {
+            if ($isSandbox && str_contains($exception->getMessage(), 'Could not match input arguments')) {
+                return [];
+            }
+            throw $exception;
+        }
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function fetchOrderItems(ChannelAccount $account, string $amazonOrderId, ?string $region = null): array
     {
         $items = [];
         $nextToken = null;
@@ -153,8 +172,8 @@ final class SpApiSellerDataProvider implements SellerDataProvider
         } catch (AmazonSpApiException $exception) {
             $isSandbox = (bool) ($account->metadata['sandbox'] ?? config('services.amazon.sandbox'));
             if ($isSandbox && str_contains($exception->getMessage(), 'Could not match input arguments')) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
-                    'asin' => 'Cannot manually import this ASIN in Sandbox mode. Amazon Sandbox only supports specific hardcoded mock ASINs. Reconnect your account without Sandbox to import real products.'
+                throw ValidationException::withMessages([
+                    'asin' => 'Cannot manually import this ASIN in Sandbox mode. Amazon Sandbox only supports specific hardcoded mock ASINs. Reconnect your account without Sandbox to import real products.',
                 ]);
             }
             throw $exception;
@@ -179,8 +198,8 @@ final class SpApiSellerDataProvider implements SellerDataProvider
         } catch (AmazonSpApiException $exception) {
             $isSandbox = (bool) ($account->metadata['sandbox'] ?? config('services.amazon.sandbox'));
             if ($isSandbox && str_contains($exception->getMessage(), 'Could not match input arguments')) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
-                    'sku' => 'Cannot manually fetch this SKU in Sandbox mode. Amazon Sandbox only supports specific hardcoded mock SKUs. Reconnect your account without Sandbox to interact with real listings.'
+                throw ValidationException::withMessages([
+                    'sku' => 'Cannot manually fetch this SKU in Sandbox mode. Amazon Sandbox only supports specific hardcoded mock SKUs. Reconnect your account without Sandbox to interact with real listings.',
                 ]);
             }
             throw $exception;
